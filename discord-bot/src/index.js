@@ -195,7 +195,7 @@ app.post(
 
 
             const data = req.body;
-
+            const { syncTallyToEOS } = require("./eos/onboarding");
 
             console.log(
                 "Received onboarding:",
@@ -249,7 +249,11 @@ app.post(
 
             }
 
+            await syncTallyToEOS(data, member);
 
+            console.log(
+                `Synced Tally onboarding to EOS for ${member.user.tag}`
+            );
 
 
             /*
