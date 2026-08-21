@@ -5,11 +5,19 @@ const express = require("express");
 const {
     Client,
     GatewayIntentBits,
-    EmbedBuilder
+    EmbedBuilder,
+    REST,
+    Routes
 } = require("discord.js");
 
 const findRole = require("./roleFinder");
 const findChannel = require("./channelFinder");
+
+const {
+    eosCommand,
+    handleEosCommand
+} = require("./eos/commands");
+
 
 
 const app = express();
@@ -86,6 +94,24 @@ client.once(
             channels.size
         );
 
+                const rest = new REST({ version: "10" }).setToken(
+            process.env.DISCORD_TOKEN
+        );
+
+        await rest.put(
+            Routes.applicationGuildCommands(
+                client.user.id,
+                process.env.GUILD_ID
+            ),
+            {
+                body: [
+                    eosCommand.toJSON()
+                ]
+            }
+        );
+
+        console.log("Registered /eos command");
+
     }
 );
 
@@ -99,16 +125,31 @@ client.once(
 |--------------------------------------------------------------------------
 */
 
-client.on(
-    "guildMemberAdd",
-    async (member)=>{
+client.on("interactionCreate", async (interaction) => {
+    if (!interaction.isChatInputCommand()) {
+        return;
+    }
+
+    if (interaction.commandName === "eos") {
+        await handleEosCommand(interaction);
+    }
+});
+
+client.on("guildMemberAdd", async (member) => {
+    const { syncMemberToEOS } = require("./eos/onboarding");
+
+    try {
+        await syncMemberToEOS(member);
+        console.log(`Synced ${member.user.tag} to EOS`);
+    } catch (error) {
+        console.error("Failed to sync member to EOS:", error);
+    }
+
+    try {
 
 
-        try {
-
-
-            await member.send(
-`
+        await member.send(
+            `
 Welcome to Venu!
 
 Please complete your onboarding form:
@@ -117,22 +158,22 @@ ${process.env.TALLY_FORM_URL}
 
 Your access and team setup will be automatically configured.
 `
-            );
+        );
 
 
-        } catch(error){
+    } catch (error) {
 
 
-            console.log(
-                "Could not DM user:",
-                error.message
-            );
-
-
-        }
+        console.log(
+            "Could not DM user:",
+            error.message
+        );
 
 
     }
+
+
+}
 );
 
 
