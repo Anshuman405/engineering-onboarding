@@ -3,16 +3,20 @@ require("dotenv").config();
 const EOS_API_URL = process.env.EOS_API_URL;
 const EOS_API_KEY = process.env.EOS_API_KEY;
 
-if (!EOS_API_URL) {
-  throw new Error("EOS_API_URL is not configured");
+class EosApiError extends Error {
+  constructor(message, status, retryAfterMs) {
+    super(message);
+    this.name = "EosApiError";
+    this.status = status;
+    this.retryAfterMs = retryAfterMs;
+  }
 }
 
-if (!EOS_API_KEY) {
-  throw new Error("EOS_API_KEY is not configured");
-}
-
-async function eosRequest(path, options = {}) {
-  const response = await fetch(`${EOS_API_URL}${path}`, {
+async function eosRequest(path, options = {}, request = fetch) {
+  if (!EOS_API_URL || !EOS_API_KEY) {
+    throw new EosApiError("EOS_API_URL and EOS_API_KEY must be configured", 0);
+  }
+  const response = await request(`${EOS_API_URL}${path}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -32,10 +36,14 @@ async function eosRequest(path, options = {}) {
   }
 
   if (!response.ok) {
-    throw new Error(
+    const retryAfter = response.headers.get("retry-after");
+    const retryAfterMs = retryAfter ? Math.max(0, Number(retryAfter) * 1000) : undefined;
+    throw new EosApiError(
       `EOS API ${response.status}: ${
         typeof data === "string" ? data : JSON.stringify(data)
-      }`
+      }`,
+      response.status,
+      Number.isFinite(retryAfterMs) ? retryAfterMs : undefined,
     );
   }
 
@@ -43,5 +51,6 @@ async function eosRequest(path, options = {}) {
 }
 
 module.exports = {
+  EosApiError,
   eosRequest,
 };

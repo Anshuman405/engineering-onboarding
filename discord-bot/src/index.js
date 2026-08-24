@@ -10,6 +10,11 @@ const {
     Routes
 } = require("discord.js");
 
+const discordIntents = [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers
+];
+
 const findRole = require("./roleFinder");
 const findChannel = require("./channelFinder");
 
@@ -27,11 +32,7 @@ app.use(express.json());
 
 
 const client = new Client({
-
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMembers
-    ]
+    intents: discordIntents
 
 });
 

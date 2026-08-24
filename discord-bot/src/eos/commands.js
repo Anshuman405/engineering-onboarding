@@ -87,8 +87,8 @@ function truncate(value, max = 1024) {
 |--------------------------------------------------------------------------
 */
 
-async function handleStatus(interaction) {
-  const result = await eosRequest("/api/eos/status");
+async function handleStatus(interaction, request = eosRequest) {
+  const result = await request("/api/eos/status");
 
   const status = result.data || result;
 
@@ -131,6 +131,16 @@ async function handleStatus(interaction) {
           ? "Connected"
           : String(status.database ?? "Unknown"),
         inline: true,
+      },
+      {
+        name: "Discord Messages",
+        value: String(status.discord?.messages ?? 0),
+        inline: true,
+      },
+      {
+        name: "Discord Ingestion",
+        value: truncate(status.discord?.latestIngestion?.status ?? "No batches"),
+        inline: true,
       }
     )
     .setTimestamp();
@@ -146,10 +156,10 @@ async function handleStatus(interaction) {
 |--------------------------------------------------------------------------
 */
 
-async function handleProfile(interaction) {
+async function handleProfile(interaction, request = eosRequest) {
   const discordUserId = interaction.user.id;
 
-  const result = await eosRequest(
+  const result = await request(
     `/api/engineers/profile/${encodeURIComponent(discordUserId)}`
   );
 
@@ -218,7 +228,7 @@ async function handleProfile(interaction) {
 |--------------------------------------------------------------------------
 */
 
-async function handleConnectGitHub(interaction, value) {
+async function handleConnectGitHub(interaction, value, request = eosRequest) {
   const githubUsername = value.trim().replace(/^@/, "");
 
   if (!githubUsername) {
@@ -229,7 +239,7 @@ async function handleConnectGitHub(interaction, value) {
 
   const discordUserId = interaction.user.id;
 
-  const result = await eosRequest(
+  const result = await request(
     `/api/engineers/profile/${encodeURIComponent(
       discordUserId
     )}/github`,
@@ -259,7 +269,7 @@ async function handleConnectGitHub(interaction, value) {
 |--------------------------------------------------------------------------
 */
 
-async function handleConnectEmail(interaction, value) {
+async function handleConnectEmail(interaction, value, request = eosRequest) {
   const email = value.trim().toLowerCase();
 
   if (!email) {
@@ -283,7 +293,7 @@ async function handleConnectEmail(interaction, value) {
 
   const discordUserId = interaction.user.id;
 
-  const result = await eosRequest(
+  const result = await request(
     `/api/engineers/profile/${encodeURIComponent(
       discordUserId
     )}/email`,
@@ -313,16 +323,16 @@ async function handleConnectEmail(interaction, value) {
 |--------------------------------------------------------------------------
 */
 
-async function handleConnect(interaction) {
+async function handleConnect(interaction, request = eosRequest) {
   const type = interaction.options.getString("type", true);
   const value = interaction.options.getString("value", true);
 
   if (type === "github") {
-    return handleConnectGitHub(interaction, value);
+    return handleConnectGitHub(interaction, value, request);
   }
 
   if (type === "email") {
-    return handleConnectEmail(interaction, value);
+    return handleConnectEmail(interaction, value, request);
   }
 
   return interaction.editReply({
@@ -343,7 +353,7 @@ async function handleConnect(interaction) {
 |--------------------------------------------------------------------------
 */
 
-async function handleSync(interaction) {
+async function handleSync(interaction, request = eosRequest) {
   /*
    * Only allow administrators to run the full sync.
    */
@@ -393,7 +403,7 @@ async function handleSync(interaction) {
       })
     );
 
-    const result = await eosRequest("/api/sync/discord", {
+    const result = await request("/api/sync/discord", {
       method: "POST",
       body: JSON.stringify({
         members: payload,
@@ -441,7 +451,7 @@ async function handleSync(interaction) {
 |--------------------------------------------------------------------------
 */
 
-async function handleEosCommand(interaction) {
+async function handleEosCommand(interaction, request = eosRequest) {
   try {
     const subcommand =
       interaction.options.getSubcommand();
@@ -456,16 +466,16 @@ async function handleEosCommand(interaction) {
 
     switch (subcommand) {
       case "status":
-        return await handleStatus(interaction);
+        return await handleStatus(interaction, request);
 
       case "profile":
-        return await handleProfile(interaction);
+        return await handleProfile(interaction, request);
 
       case "connect":
-        return await handleConnect(interaction);
+        return await handleConnect(interaction, request);
 
       case "sync":
-        return await handleSync(interaction);
+        return await handleSync(interaction, request);
 
       default:
         return interaction.editReply({
@@ -499,4 +509,8 @@ async function handleEosCommand(interaction) {
 module.exports = {
   eosCommand,
   handleEosCommand,
+  handleStatus,
+  handleProfile,
+  handleConnect,
+  handleSync,
 };
