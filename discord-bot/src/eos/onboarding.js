@@ -14,14 +14,15 @@ async function syncMemberToEOS(member) {
   });
 }
 
-async function syncTallyToEOS(data, member) {
-  return eosRequest("/api/engineers/onboarding", {
+async function syncTallyToEOS(data, member, request = eosRequest) {
+  return request("/api/engineers/onboarding", {
     method: "POST",
     body: JSON.stringify({
       discordUserId: member.id,
       name: data.name,
       email: data.email || null,
       githubUsername: data.github || data.githubUsername || null,
+      completed: true,
     }),
   });
 }

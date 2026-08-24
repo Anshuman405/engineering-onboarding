@@ -1,6 +1,9 @@
 const {
   SlashCommandBuilder,
   EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
 } = require("discord.js");
 
 const { eosRequest } = require("./client");
@@ -51,6 +54,24 @@ const eosCommand = new SlashCommandBuilder()
         option
           .setName("value")
           .setDescription("Your GitHub username or email address")
+          .setRequired(true)
+      )
+  )
+
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName("onboarding")
+      .setDescription("Start your guided Venu engineering onboarding")
+      .addStringOption((option) =>
+        option
+          .setName("github")
+          .setDescription("Your GitHub username")
+          .setRequired(true)
+      )
+      .addStringOption((option) =>
+        option
+          .setName("email")
+          .setDescription("Your email address")
           .setRequired(true)
       )
   )
@@ -342,6 +363,95 @@ async function handleConnect(interaction, request = eosRequest) {
 
 /*
 |--------------------------------------------------------------------------
+| /eos onboarding
+|--------------------------------------------------------------------------
+*/
+
+async function handleOnboarding(
+  interaction,
+  request = eosRequest,
+  tallyFormUrl = process.env.TALLY_FORM_URL
+) {
+  const githubUsername = interaction.options
+    .getString("github", true)
+    .trim()
+    .replace(/^@/, "");
+  const email = interaction.options
+    .getString("email", true)
+    .trim()
+    .toLowerCase();
+
+  if (!githubUsername) {
+    return interaction.editReply({
+      content: "Please provide your GitHub username.",
+    });
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return interaction.editReply({
+      content: "That doesn't look like a valid email address. Please try again.",
+    });
+  }
+
+  if (!/^https?:\/\//i.test(tallyFormUrl || "")) {
+    return interaction.editReply({
+      content:
+        "The Venu onboarding form is not configured yet. Please contact an administrator.",
+    });
+  }
+
+  const name =
+    interaction.member?.displayName ||
+    interaction.user.globalName ||
+    interaction.user.username;
+
+  await request("/api/engineers/onboarding", {
+    method: "POST",
+    body: JSON.stringify({
+      discordUserId: interaction.user.id,
+      name,
+      email,
+      githubUsername,
+      completed: false,
+    }),
+  });
+
+  const embed = new EmbedBuilder()
+    .setTitle("Venu engineering onboarding")
+    .setDescription("Your EOS profile is connected. Continue with the Venu onboarding form.")
+    .addFields(
+      {
+        name: "Step 1 — EOS profile",
+        value: `Email and GitHub [@${githubUsername}](https://github.com/${githubUsername}) are connected.`,
+      },
+      {
+        name: "Step 2 — Venu onboarding form",
+        value:
+          "Complete the Tally form using the same Discord identity. The existing onboarding automation will configure your server access.",
+      },
+      {
+        name: "Step 3 — Venu 1.x local setup",
+        value:
+          "After the form is processed, this bot will DM you the local-development checklist.",
+      }
+    )
+    .setTimestamp();
+
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setLabel("Open Venu onboarding form")
+      .setStyle(ButtonStyle.Link)
+      .setURL(tallyFormUrl)
+  );
+
+  return interaction.editReply({
+    embeds: [embed],
+    components: [row],
+  });
+}
+
+/*
+|--------------------------------------------------------------------------
 | /eos sync
 |--------------------------------------------------------------------------
 |
@@ -461,7 +571,7 @@ async function handleEosCommand(interaction, request = eosRequest) {
      * longer than Discord's initial interaction window.
      */
     await interaction.deferReply({
-      ephemeral: false,
+      ephemeral: subcommand === "onboarding",
     });
 
     switch (subcommand) {
@@ -473,6 +583,9 @@ async function handleEosCommand(interaction, request = eosRequest) {
 
       case "connect":
         return await handleConnect(interaction, request);
+
+      case "onboarding":
+        return await handleOnboarding(interaction, request);
 
       case "sync":
         return await handleSync(interaction, request);
@@ -512,5 +625,6 @@ module.exports = {
   handleStatus,
   handleProfile,
   handleConnect,
+  handleOnboarding,
   handleSync,
 };

@@ -256,6 +256,23 @@ app.post(
                 `Synced Tally onboarding to EOS for ${member.user.tag}`
             );
 
+            try {
+                const {
+                    sendVenuSetupInstructions
+                } = require("./eos/venuSetup");
+
+                await sendVenuSetupInstructions(member);
+
+                console.log(
+                    `Sent Venu 1.x setup instructions to ${member.user.tag}`
+                );
+            } catch (error) {
+                console.log(
+                    "Could not DM Venu 1.x setup instructions:",
+                    error.message
+                );
+            }
+
 
             /*
             Assign Default Roles
