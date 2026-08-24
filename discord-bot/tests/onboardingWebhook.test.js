@@ -63,3 +63,17 @@ test("onboarding logs expose structure but no submitted identity values", () => 
   assert.equal(summary.hasGitHub, true);
   assert.doesNotMatch(serialized, /sensitive/);
 });
+
+test("the onboarding route does not log a submitted Discord identifier", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const source = fs.readFileSync(
+    path.join(__dirname, "../src/index.js"),
+    "utf8"
+  );
+
+  assert.doesNotMatch(
+    source,
+    /Discord user not found:[\s\S]{0,80}data\.discord/
+  );
+});

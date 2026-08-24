@@ -245,8 +245,7 @@ app.post(
 
 
                 console.log(
-                    "Discord user not found:",
-                    data.discord
+                    "Discord user not found for authenticated onboarding submission"
                 );
 
 
