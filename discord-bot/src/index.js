@@ -194,17 +194,27 @@ app.post(
 
         try {
 
+            const {
+                authorizeOnboardingWebhook,
+                onboardingLogSummary
+            } = require("./onboardingWebhook");
+
+            const authorization =
+                authorizeOnboardingWebhook(req);
+
+            if (!authorization.ok) {
+                return res.status(authorization.status).json({
+                    error: authorization.error
+                });
+            }
+
 
             const data = req.body;
             const { syncTallyToEOS } = require("./eos/onboarding");
 
             console.log(
-                "Received onboarding:",
-                JSON.stringify(
-                    data,
-                    null,
-                    2
-                )
+                "Received authenticated onboarding submission:",
+                onboardingLogSummary(data)
             );
 
 

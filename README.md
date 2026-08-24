@@ -10,9 +10,12 @@ Copy `discord-bot/.env.example` to `discord-bot/.env`, preserve the existing onb
 EOS_API_URL=http://localhost:3000
 EOS_API_KEY=<same key configured in EOS>
 TALLY_FORM_URL=<public Venu onboarding form URL>
+ONBOARDING_WEBHOOK_SECRET=<dedicated random secret shared with the Tally Apps Script>
 ```
 
 EOS performs bounded message retrieval directly from Discord when context is requested. Configure `DISCORD_BOT_TOKEN` in EOS with the same bot token if live retrieval is needed. The onboarding bot requires only its existing Guild and GuildMembers intents; Message Content intent is not required for EOS mirroring because mirroring is disabled.
+
+The Apps Script that sends completed Tally submissions to `POST /onboarding` must include either `Authorization: Bearer <ONBOARDING_WEBHOOK_SECRET>` or `x-onboarding-secret: <ONBOARDING_WEBHOOK_SECRET>`. The endpoint fails closed when the secret is missing or incorrect and logs only field-presence metadata, never the submitted email, GitHub username, or raw form payload.
 
 Run integration/publisher contract tests and syntax checks with:
 
