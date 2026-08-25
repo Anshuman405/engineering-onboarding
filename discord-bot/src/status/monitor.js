@@ -1,5 +1,5 @@
 const { checkServices } = require("./healthChecker");
-const { buildStatusEmbed } = require("./formatter");
+const { buildStatusComponents, buildStatusEmbed } = require("./formatter");
 const { STATUS_MONITOR_DURATION_MS, DEFAULT_STATUS_CHECK_INTERVAL_MS } = require("./config");
 
 class StatusMonitorManager {
@@ -32,6 +32,7 @@ class StatusMonitorManager {
       results: [],
       timer: null,
       active: true,
+      updating: null,
     };
     this.sessions.set(id, session);
     await this.update(session);
@@ -40,6 +41,12 @@ class StatusMonitorManager {
   }
 
   async update(session) {
+    if (session.updating) return session.updating;
+    session.updating = this.performUpdate(session).finally(() => { session.updating = null; });
+    return session.updating;
+  }
+
+  async performUpdate(session) {
     if (!session.active) return;
     if (this.now() >= session.expiresAt) {
       await this.expire(session.id);
@@ -55,11 +62,19 @@ class StatusMonitorManager {
           checkedAt: new Date(this.now()),
           expiresAt: session.expiresAt,
         })],
+        components: buildStatusComponents(),
       });
     } catch (error) {
       this.remove(session);
       console.error("Status monitor message update failed:", error?.message || error);
     }
+  }
+
+  async refresh(id) {
+    const session = this.sessions.get(id);
+    if (!session || !session.active) return false;
+    await this.update(session);
+    return session.active;
   }
 
   schedule(session) {
@@ -99,6 +114,7 @@ class StatusMonitorManager {
           expired: true,
           expirationReason,
         })],
+        components: [],
       });
     } catch (error) {
       console.error("Status monitor expiration update failed:", error?.message || error);

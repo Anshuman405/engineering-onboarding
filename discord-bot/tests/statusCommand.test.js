@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const { loadStatusConfig } = require("../src/status/config");
-const { handleStatusCommand, statusCommand } = require("../src/status/command");
+const { handleStatusCommand, handleStatusRefresh, statusCommand } = require("../src/status/command");
 
 test("/status is registered and creates exactly one message before monitoring it", async () => {
   assert.equal(statusCommand.toJSON().name, "status");
@@ -20,6 +20,32 @@ test("/status is registered and creates exactly one message before monitoring it
   assert.equal(starts[0].message, message);
   assert.equal(starts[0].targets.length, 6);
   assert.equal(starts[0].intervalMs, 12345);
+  assert.equal(replies[0].components[0].toJSON().components[0].custom_id, "status:refresh");
+});
+
+test("the refresh button acknowledges the interaction and refreshes the existing monitor", async () => {
+  const actions = [];
+  const interaction = {
+    customId: "status:refresh",
+    message: { id: "status-message" },
+    deferUpdate: async () => actions.push("deferred"),
+    followUp: async () => actions.push("followup"),
+  };
+  const refreshed = await handleStatusRefresh(interaction, {
+    refresh: async (id) => { actions.push(id); return true; },
+  });
+  assert.equal(refreshed, true);
+  assert.deepEqual(actions, ["deferred", "status-message"]);
+});
+
+test("an expired refresh button fails privately", async () => {
+  const followUps = [];
+  await handleStatusRefresh({
+    customId: "status:refresh", message: { id: "expired" }, deferUpdate: async () => undefined,
+    followUp: async (payload) => followUps.push(payload),
+  }, { refresh: async () => false });
+  assert.equal(followUps[0].ephemeral, true);
+  assert.match(followUps[0].content, /expired/i);
 });
 
 test("invalid configuration fails privately without starting a monitor", async () => {

@@ -680,6 +680,11 @@ async function handleDocument(interaction, request = eosRequest, download = fetc
 async function handleDocs(interaction, request = eosRequest) {
   const query = interaction.options.getString("query", true).trim();
   const category = interaction.options.getString("category");
+  try {
+    await request("/api/documents/sync", { method: "POST" });
+  } catch (error) {
+    console.warn("Drive document refresh unavailable; searching the existing EOS index:", error?.message || error);
+  }
   const params = new URLSearchParams({ q: query, limit: "10" });
   if (category) params.set("category", category);
   const result = await request(`/api/documents/search?${params.toString()}`);

@@ -106,7 +106,10 @@ test("/eos document validates action-specific fields before API calls", async ()
 
 test("/eos docs searches EOS and returns source links without database access", async () => {
   const target = interaction({ query: "registration status", category: "Architecture" });
+  const calls = [];
   await handleDocs(target, async (path) => {
+    calls.push(path);
+    if (path === "/api/documents/sync") return { data: { created: 1 } };
     assert.match(path, /^\/api\/documents\/search\?/);
     assert.match(path, /category=Architecture/);
     return { data: [{ title: "Registration status", category: "Architecture", description: "State transitions", externalUrl: "https://docs.google.com/document/d/1/edit" }] };
@@ -114,4 +117,21 @@ test("/eos docs searches EOS and returns source links without database access", 
   const embed = target.replies[0].embeds[0].toJSON();
   assert.equal(embed.title, "EOS documentation search");
   assert.match(embed.description, /docs.google.com/);
+  assert.equal(calls[0], "/api/documents/sync");
+  assert.match(calls[1], /^\/api\/documents\/search\?/);
+});
+
+test("/eos docs still searches durable knowledge when Drive is temporarily unavailable", async () => {
+  const target = interaction({ query: "cached runbook" });
+  const originalWarn = console.warn;
+  console.warn = () => undefined;
+  try {
+    await handleDocs(target, async (path) => {
+      if (path === "/api/documents/sync") throw new Error("Drive unavailable");
+      return { data: [{ title: "Cached runbook", category: "Setup", externalUrl: "https://docs.google.com/document/d/cached/edit" }] };
+    });
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.match(target.replies[0].embeds[0].toJSON().description, /Cached runbook/);
 });

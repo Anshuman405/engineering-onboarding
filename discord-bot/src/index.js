@@ -25,7 +25,8 @@ const {
 
 const {
     statusCommand,
-    handleStatusCommand
+    handleStatusCommand,
+    handleStatusRefresh
 } = require("./status/command");
 const { StatusMonitorManager } = require("./status/monitor");
 
@@ -136,6 +137,17 @@ client.once(
 */
 
 client.on("interactionCreate", async (interaction) => {
+    if (interaction.isButton()) {
+        try {
+            await handleStatusRefresh(interaction, statusMonitor);
+        } catch (error) {
+            console.error("Status refresh failed:", error?.message || error);
+            if (!interaction.replied && !interaction.deferred) {
+                await interaction.reply({ content: "Status refresh failed. Please try again.", ephemeral: true }).catch(() => undefined);
+            }
+        }
+        return;
+    }
     if (!interaction.isChatInputCommand()) {
         return;
     }

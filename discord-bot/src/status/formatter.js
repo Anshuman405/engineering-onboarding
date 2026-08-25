@@ -1,4 +1,6 @@
-const { EmbedBuilder } = require("discord.js");
+const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require("discord.js");
+
+const STATUS_REFRESH_CUSTOM_ID = "status:refresh";
 
 const ENVIRONMENTS = ["STAGING", "TESTING", "PRODUCTION"];
 const STATE_STYLE = {
@@ -55,9 +57,21 @@ function buildStatusEmbed({ targets, results = [], checkedAt, expiresAt, expired
   return embed;
 }
 
+function buildStatusComponents() {
+  return [new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(STATUS_REFRESH_CUSTOM_ID)
+      .setLabel("Refresh now")
+      .setEmoji("🔄")
+      .setStyle(ButtonStyle.Secondary)
+  )];
+}
+
 module.exports = {
   ENVIRONMENTS,
+  STATUS_REFRESH_CUSTOM_ID,
   buildStatusEmbed,
+  buildStatusComponents,
   remainingTime,
   resultLine,
 };

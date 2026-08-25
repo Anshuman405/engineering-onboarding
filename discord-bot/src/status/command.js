@@ -1,6 +1,6 @@
 const { SlashCommandBuilder } = require("discord.js");
 const { loadStatusConfig } = require("./config");
-const { buildStatusEmbed } = require("./formatter");
+const { STATUS_REFRESH_CUSTOM_ID, buildStatusComponents, buildStatusEmbed } = require("./formatter");
 
 const statusCommand = new SlashCommandBuilder()
   .setName("status")
@@ -22,6 +22,7 @@ async function handleStatusCommand(interaction, monitor, config = loadStatusConf
       checkedAt: new Date(now),
       expiresAt: now + config.durationMs,
     })],
+    components: buildStatusComponents(),
   });
   const message = await interaction.fetchReply();
   return monitor.start({
@@ -31,7 +32,18 @@ async function handleStatusCommand(interaction, monitor, config = loadStatusConf
   });
 }
 
+async function handleStatusRefresh(interaction, monitor) {
+  if (interaction.customId !== STATUS_REFRESH_CUSTOM_ID) return false;
+  await interaction.deferUpdate();
+  const refreshed = await monitor.refresh(interaction.message.id);
+  if (!refreshed) {
+    await interaction.followUp({ content: "This status monitor has expired. Run `/status` to start another one.", ephemeral: true }).catch(() => undefined);
+  }
+  return true;
+}
+
 module.exports = {
   handleStatusCommand,
+  handleStatusRefresh,
   statusCommand,
 };

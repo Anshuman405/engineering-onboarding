@@ -19,13 +19,13 @@ The Apps Script that sends completed Tally submissions to `POST /onboarding` mus
 
 ## EOS documentation
 
-`/eos document` lets an engineer create a short Drive-backed document, upload one PDF/Markdown/TXT/DOCX file, or index an existing Drive/external link. `/eos docs` searches the EOS documentation index. Both workflows call the authenticated EOS API; the bot never accesses Neon directly and does not retain the attachment after the request completes.
+`/eos document` lets an engineer create a short Drive-backed document, upload one PDF/Markdown/TXT/DOCX file, or index an existing Drive/external link. `/eos docs` first requests a bounded Drive-folder refresh and then searches the EOS documentation index; if Drive is temporarily unavailable it safely searches the existing durable index. Both workflows call the authenticated EOS API; the bot never accesses Neon directly and does not retain the attachment after the request completes.
 
 Configure `EOS_DOCUMENT_MAX_UPLOAD_BYTES` to the same or a lower value than EOS `DOCUMENT_MAX_UPLOAD_BYTES` (10 MB by default). Create/upload require the EOS Google Drive provider; link-only records continue to work when Drive is unavailable. See the EOS repository's `docs/DOCUMENTATION.md` for Drive folder and service-account setup.
 
 ## Venu service status monitoring
 
-`/status` creates one public Discord message, checks the staging, testing, and production frontend/backend services immediately, and edits that same message every 60 seconds for 30 minutes. The final edit marks the monitor expired. Each invocation has an independent in-memory session; no status-session state or HTTP response body is persisted in EOS or Neon.
+`/status` creates one public Discord message, checks the staging, testing, and production frontend/backend services immediately, and edits that same message every 60 seconds for 30 minutes. Engineers can press **Refresh now** to run the same six checks immediately without creating another message or changing the automatic timer. The final edit marks the monitor expired and removes the button. Each invocation has an independent in-memory session; no status-session state or HTTP response body is persisted in EOS or Neon.
 
 The six verified defaults are declared once in `discord-bot/src/status/config.js` and can be overridden through:
 

@@ -90,6 +90,20 @@ test("multiple users receive independent monitor sessions and timers", async () 
   assert.equal(second.edits.at(-1).embeds[0].expirationReason, "Restarting");
 });
 
+test("manual refresh checks immediately without adding or resetting timers", async () => {
+  const clock = fakeClock();
+  const { manager, checks } = monitorFixture(clock);
+  const message = fakeMessage("manual-refresh");
+  await manager.start({ message, targets: [{ id: "service" }] });
+  assert.equal(checks(), 1);
+  assert.equal(clock.timerCount(), 1);
+  assert.equal(await manager.refresh(message.id), true);
+  assert.equal(checks(), 2);
+  assert.equal(message.edits.length, 2);
+  assert.equal(clock.timerCount(), 1);
+  assert.equal(message.edits.at(-1).components[0].toJSON().components[0].custom_id, "status:refresh");
+});
+
 test("Discord edit failure stops that session and leaves no timer", async () => {
   const clock = fakeClock();
   const originalError = console.error;

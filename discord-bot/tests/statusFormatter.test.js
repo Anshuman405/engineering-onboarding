@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const { loadStatusConfig } = require("../src/status/config");
-const { buildStatusEmbed, remainingTime } = require("../src/status/formatter");
+const { buildStatusComponents, buildStatusEmbed, remainingTime } = require("../src/status/formatter");
 
 test("status formatting groups all services and includes useful result details", () => {
   const { targets } = loadStatusConfig({});
@@ -23,6 +23,14 @@ test("status formatting groups all services and includes useful result details",
   assert.match(embed.fields[1].value, /🔴.*Backend.*HTTP 502/s);
   assert.match(embed.fields[0].value, /🟢.*Frontend.*80ms/s);
   assert.match(embed.footer.text, /01:00 more/);
+});
+
+test("active status messages include one manual refresh button", () => {
+  const components = buildStatusComponents().map((row) => row.toJSON());
+  assert.equal(components.length, 1);
+  assert.equal(components[0].components.length, 1);
+  assert.equal(components[0].components[0].custom_id, "status:refresh");
+  assert.equal(components[0].components[0].label, "Refresh now");
 });
 
 test("expired formatting clearly stops the monitor and instructs the user", () => {
