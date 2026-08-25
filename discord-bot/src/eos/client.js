@@ -16,10 +16,11 @@ async function eosRequest(path, options = {}, request = fetch) {
   if (!EOS_API_URL || !EOS_API_KEY) {
     throw new EosApiError("EOS_API_URL and EOS_API_KEY must be configured", 0);
   }
+  const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
   const response = await request(`${EOS_API_URL}${path}`, {
     ...options,
     headers: {
-      "Content-Type": "application/json",
+      ...(!isFormData ? { "Content-Type": "application/json" } : {}),
       "x-eos-api-key": EOS_API_KEY,
       ...(options.headers || {}),
     },

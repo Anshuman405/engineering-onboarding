@@ -8,6 +8,11 @@ const {
 
 const { eosRequest } = require("./client");
 
+const DOCUMENT_CATEGORIES = [
+  "Architecture", "Development", "Setup", "Deployment", "Product", "Workflow",
+  "Troubleshooting", "Onboarding", "AI / Codex", "Decision", "Other",
+];
+
 /*
 |--------------------------------------------------------------------------
 | /eos command definition
@@ -80,6 +85,37 @@ const eosCommand = new SlashCommandBuilder()
     subcommand
       .setName("sync")
       .setDescription("Sync the Discord server with Engineering OS")
+  )
+
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName("document")
+      .setDescription("Create, upload, or link engineering documentation")
+      .addStringOption((option) => option.setName("action").setDescription("How to add the document").setRequired(true).addChoices(
+        { name: "Create a Google Doc", value: "create" },
+        { name: "Upload a file", value: "upload" },
+        { name: "Link an existing document", value: "link" }
+      ))
+      .addStringOption((option) => option.setName("title").setDescription("Document title").setRequired(true).setMaxLength(300))
+      .addStringOption((option) => option.setName("category").setDescription("Documentation category").setRequired(true).addChoices(
+        ...DOCUMENT_CATEGORIES.map((category) => ({ name: category, value: category }))
+      ))
+      .addStringOption((option) => option.setName("content").setDescription("Short document content (create only)").setMaxLength(4000))
+      .addAttachmentOption((option) => option.setName("file").setDescription("PDF, Markdown, TXT, or DOCX (upload only)"))
+      .addStringOption((option) => option.setName("url").setDescription("Google Drive/Docs or external URL (link only)"))
+      .addStringOption((option) => option.setName("description").setDescription("Short description").setMaxLength(1000))
+      .addStringOption((option) => option.setName("tags").setDescription("Comma-separated tags").setMaxLength(500))
+      .addStringOption((option) => option.setName("github").setDescription("Optional ingested GitHub repository, issue, PR, or commit URL"))
+  )
+
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName("docs")
+      .setDescription("Search engineering documentation")
+      .addStringOption((option) => option.setName("query").setDescription("What are you looking for?").setRequired(true).setMinLength(2).setMaxLength(500))
+      .addStringOption((option) => option.setName("category").setDescription("Optional category filter").addChoices(
+        ...DOCUMENT_CATEGORIES.map((category) => ({ name: category, value: category }))
+      ))
   );
 
 /*
@@ -555,6 +591,108 @@ async function handleSync(interaction, request = eosRequest) {
   }
 }
 
+function parseDocumentTags(value) {
+  return [...new Set(String(value || "").split(",").map((tag) => tag.trim().toLowerCase()).filter(Boolean))].slice(0, 25);
+}
+
+function githubRelationFromUrl(value) {
+  if (!value) return [];
+  let url;
+  try { url = new URL(value); } catch { throw new Error("The GitHub relationship must be a valid URL."); }
+  if (url.hostname.toLowerCase() !== "github.com") throw new Error("The GitHub relationship must use github.com.");
+  const segments = url.pathname.split("/").filter(Boolean);
+  if (segments.length < 2) throw new Error("The GitHub URL must identify a repository, issue, pull request, or commit.");
+  const marker = segments[2]?.toLowerCase();
+  const type = marker === "issues" ? "ISSUE" : marker === "pull" ? "PULL_REQUEST" : marker === "commit" ? "COMMIT" : "REPOSITORY";
+  return [{ type, url: url.toString() }];
+}
+
+function documentPayload(interaction) {
+  return {
+    title: interaction.options.getString("title", true),
+    category: interaction.options.getString("category", true),
+    description: interaction.options.getString("description") || undefined,
+    tags: parseDocumentTags(interaction.options.getString("tags")),
+    creatorDiscordUserId: interaction.user.id,
+    githubRelations: githubRelationFromUrl(interaction.options.getString("github")),
+  };
+}
+
+function documentResultEmbed(document) {
+  const embed = new EmbedBuilder()
+    .setTitle("Documentation saved")
+    .setDescription(`**${truncate(document.title, 250)}**`)
+    .addFields(
+      { name: "Category", value: truncate(document.category), inline: true },
+      { name: "Source", value: truncate(document.sourceType), inline: true },
+      { name: "Indexed", value: document.extractedContent || document.indexedCharacters ? "Yes" : "Metadata only", inline: true }
+    )
+    .setFooter({ text: "Drive/external storage remains the document source of truth" })
+    .setTimestamp();
+  if (document.externalUrl) embed.setURL(document.externalUrl).addFields({ name: "Open document", value: document.externalUrl });
+  return embed;
+}
+
+async function downloadDiscordAttachment(attachment, request = fetch) {
+  const url = new URL(attachment.url);
+  if (!["cdn.discordapp.com", "media.discordapp.net", "cdn.discordapp.net"].includes(url.hostname.toLowerCase())) {
+    throw new Error("The attachment must be hosted by Discord.");
+  }
+  const maxBytes = Number(process.env.EOS_DOCUMENT_MAX_UPLOAD_BYTES || 10_000_000);
+  if (!Number.isFinite(attachment.size) || attachment.size <= 0 || attachment.size > maxBytes) {
+    throw new Error(`The attachment must be no larger than ${Math.floor(maxBytes / 1_000_000)} MB.`);
+  }
+  const response = await request(attachment.url, { redirect: "error", signal: AbortSignal.timeout(15_000) });
+  if (!response.ok) throw new Error(`Discord attachment download failed (${response.status}).`);
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.length > maxBytes) throw new Error(`The attachment must be no larger than ${Math.floor(maxBytes / 1_000_000)} MB.`);
+  return buffer;
+}
+
+async function handleDocument(interaction, request = eosRequest, download = fetch) {
+  const action = interaction.options.getString("action", true);
+  const payload = documentPayload(interaction);
+  let result;
+  if (action === "create") {
+    const content = interaction.options.getString("content");
+    if (!content?.trim()) return interaction.editReply({ content: "Add `content` when creating documentation." });
+    result = await request("/api/documents", { method: "POST", body: JSON.stringify({ ...payload, content }) });
+  } else if (action === "link") {
+    const url = interaction.options.getString("url");
+    if (!url?.trim()) return interaction.editReply({ content: "Add `url` when linking documentation." });
+    result = await request("/api/documents/link", { method: "POST", body: JSON.stringify({ ...payload, url }) });
+  } else if (action === "upload") {
+    const attachment = interaction.options.getAttachment("file");
+    if (!attachment) return interaction.editReply({ content: "Attach a PDF, Markdown, TXT, or DOCX file when uploading documentation." });
+    const buffer = await downloadDiscordAttachment(attachment, download);
+    const form = new FormData();
+    for (const [key, value] of Object.entries(payload)) {
+      if (value === undefined) continue;
+      form.append(key, typeof value === "string" ? value : JSON.stringify(value));
+    }
+    form.append("file", new Blob([buffer], { type: attachment.contentType || "application/octet-stream" }), attachment.name);
+    result = await request("/api/documents/upload", { method: "POST", body: form });
+  } else throw new Error("Unknown documentation action.");
+  const document = result.data || result;
+  return interaction.editReply({ embeds: [documentResultEmbed(document)], allowedMentions: { parse: [] } });
+}
+
+async function handleDocs(interaction, request = eosRequest) {
+  const query = interaction.options.getString("query", true).trim();
+  const category = interaction.options.getString("category");
+  const params = new URLSearchParams({ q: query, limit: "10" });
+  if (category) params.set("category", category);
+  const result = await request(`/api/documents/search?${params.toString()}`);
+  const documents = result.data || [];
+  if (!documents.length) return interaction.editReply({ content: `No documentation matched **${truncate(query, 200)}**.` });
+  const lines = documents.map((document, index) => {
+    const title = truncate(document.title, 120).replace(/[\[\]]/g, "");
+    const label = document.externalUrl ? `[${title}](${document.externalUrl})` : `**${title}**`;
+    return `${index + 1}. ${label} — ${document.category}${document.description ? `\n   ${truncate(document.description, 180)}` : ""}`;
+  });
+  return interaction.editReply({ embeds: [new EmbedBuilder().setTitle("EOS documentation search").setDescription(lines.join("\n").slice(0, 4000)).setFooter({ text: `Query: ${truncate(query, 200)}` }).setTimestamp()], allowedMentions: { parse: [] } });
+}
+
 /*
 |--------------------------------------------------------------------------
 | Main command handler
@@ -571,7 +709,7 @@ async function handleEosCommand(interaction, request = eosRequest) {
      * longer than Discord's initial interaction window.
      */
     await interaction.deferReply({
-      ephemeral: subcommand === "onboarding",
+      ephemeral: ["onboarding", "document", "docs"].includes(subcommand),
     });
 
     switch (subcommand) {
@@ -589,6 +727,12 @@ async function handleEosCommand(interaction, request = eosRequest) {
 
       case "sync":
         return await handleSync(interaction, request);
+
+      case "document":
+        return await handleDocument(interaction, request);
+
+      case "docs":
+        return await handleDocs(interaction, request);
 
       default:
         return interaction.editReply({
@@ -627,4 +771,9 @@ module.exports = {
   handleConnect,
   handleOnboarding,
   handleSync,
+  handleDocument,
+  handleDocs,
+  parseDocumentTags,
+  githubRelationFromUrl,
+  downloadDiscordAttachment,
 };
