@@ -23,6 +23,14 @@ const {
     handleEosCommand
 } = require("./eos/commands");
 
+const {
+    statusCommand,
+    handleStatusCommand
+} = require("./status/command");
+const { StatusMonitorManager } = require("./status/monitor");
+
+const statusMonitor = new StatusMonitorManager();
+
 
 
 const app = express();
@@ -106,12 +114,13 @@ client.once(
             ),
             {
                 body: [
-                    eosCommand.toJSON()
+                    eosCommand.toJSON(),
+                    statusCommand.toJSON()
                 ]
             }
         );
 
-        console.log("Registered /eos command");
+        console.log("Registered /eos and /status commands");
 
     }
 );
@@ -133,6 +142,17 @@ client.on("interactionCreate", async (interaction) => {
 
     if (interaction.commandName === "eos") {
         await handleEosCommand(interaction);
+    }
+
+    if (interaction.commandName === "status") {
+        try {
+            await handleStatusCommand(interaction, statusMonitor);
+        } catch (error) {
+            console.error("Status command failed:", error?.message || error);
+            const response = { content: "Status monitoring could not be started. Please try again.", embeds: [], components: [] };
+            if (interaction.replied || interaction.deferred) await interaction.editReply(response).catch(() => undefined);
+            else await interaction.reply({ ...response, ephemeral: true }).catch(() => undefined);
+        }
     }
 });
 
@@ -577,7 +597,7 @@ app.get(
 
 
 
-app.listen(
+const httpServer = app.listen(
     process.env.PORT || 3000,
     ()=>{
 
@@ -587,6 +607,23 @@ app.listen(
 
     }
 );
+
+let shuttingDown = false;
+
+async function shutdown() {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    await statusMonitor.expireAll(
+        "The bot is restarting. Run `/status` again after it returns to start a new 30-minute monitor."
+    );
+    client.destroy();
+    httpServer.close(() => process.exit(0));
+    const forcedExit = setTimeout(() => process.exit(0), 10_000);
+    forcedExit.unref?.();
+}
+
+process.once("SIGTERM", () => void shutdown());
+process.once("SIGINT", () => void shutdown());
 
 
 
