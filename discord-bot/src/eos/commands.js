@@ -12,6 +12,10 @@ const DOCUMENT_CATEGORIES = [
   "Architecture", "Development", "Setup", "Deployment", "Product", "Workflow",
   "Troubleshooting", "Onboarding", "AI / Codex", "Decision", "Other",
 ];
+const DEFAULT_EOS_WAKE_MAX_WAIT_MS = 75_000;
+const DEFAULT_EOS_WAKE_PROBE_TIMEOUT_MS = 8_000;
+const DEFAULT_EOS_WAKE_RETRY_MS = 2_000;
+const DEFAULT_EOS_WAKE_PROGRESS_MS = 5_000;
 
 /*
 |--------------------------------------------------------------------------
@@ -165,6 +169,57 @@ async function sendCommandError(interaction, error) {
     console.error("Could not deliver EOS command error response:", replyError?.message || "Discord API error");
     return undefined;
   }
+}
+
+function positiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function isRetryableWakeError(error) {
+  if (!(error instanceof EosApiError)) return true;
+  if (/must be configured/i.test(error.message)) return false;
+  return error.status === 0 || error.status === 429 || error.status >= 500;
+}
+
+async function waitForEosReady(interaction, request = eosRequest, options = {}) {
+  const now = options.now || Date.now;
+  const wait = options.wait || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  const maxWaitMs = positiveInteger(options.maxWaitMs ?? process.env.EOS_WAKE_MAX_WAIT_MS, DEFAULT_EOS_WAKE_MAX_WAIT_MS);
+  const probeTimeoutMs = positiveInteger(options.probeTimeoutMs ?? process.env.EOS_WAKE_PROBE_TIMEOUT_MS, DEFAULT_EOS_WAKE_PROBE_TIMEOUT_MS);
+  const retryMs = positiveInteger(options.retryMs ?? process.env.EOS_WAKE_RETRY_MS, DEFAULT_EOS_WAKE_RETRY_MS);
+  const progressMs = positiveInteger(options.progressMs ?? process.env.EOS_WAKE_PROGRESS_MS, DEFAULT_EOS_WAKE_PROGRESS_MS);
+  const startedAt = now();
+  let lastError = new EosApiError("EOS did not become ready", 0);
+  let lastProgressAt = Number.NEGATIVE_INFINITY;
+
+  while (now() - startedAt < maxWaitMs) {
+    const elapsedMs = now() - startedAt;
+    const remainingSeconds = Math.max(1, Math.ceil((maxWaitMs - elapsedMs) / 1000));
+    if (elapsedMs - lastProgressAt >= progressMs) {
+      await interaction.editReply({
+        content: `EOS is waking up on free hosting. Your command will run automatically when it is ready (up to ${remainingSeconds}s remaining).`,
+        embeds: [],
+        components: [],
+        allowedMentions: { parse: [] },
+      });
+      lastProgressAt = elapsedMs;
+    }
+
+    try {
+      const health = await request("/health", {}, fetch, { timeoutMs: probeTimeoutMs });
+      if (health?.ok === true && health?.service === "venu-engineering-os") return true;
+      lastError = new EosApiError("EOS health check returned an unexpected response", 503);
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableWakeError(error)) throw error;
+    }
+
+    const remainingMs = maxWaitMs - (now() - startedAt);
+    if (remainingMs > 0) await wait(Math.min(retryMs, remainingMs));
+  }
+
+  throw lastError;
 }
 
 /*
@@ -733,7 +788,7 @@ async function handleDocs(interaction, request = eosRequest) {
 |--------------------------------------------------------------------------
 */
 
-async function handleEosCommand(interaction, request = eosRequest) {
+async function handleEosCommand(interaction, request = eosRequest, wakeOptions = {}) {
   try {
     const subcommand =
       interaction.options.getSubcommand();
@@ -745,6 +800,8 @@ async function handleEosCommand(interaction, request = eosRequest) {
     await interaction.deferReply({
       ephemeral: ["onboarding", "document", "docs"].includes(subcommand),
     });
+
+    await waitForEosReady(interaction, request, wakeOptions);
 
     switch (subcommand) {
       case "status":
@@ -791,6 +848,7 @@ module.exports = {
   handleDocs,
   publicEosErrorMessage,
   sendCommandError,
+  waitForEosReady,
   parseDocumentTags,
   githubRelationFromUrl,
   downloadDiscordAttachment,

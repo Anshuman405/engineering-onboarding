@@ -9,6 +9,7 @@ const {
   handleProfile,
   handleStatus,
   handleSync,
+  waitForEosReady,
 } = require("../src/eos/commands");
 const { EosApiError } = require("../src/eos/client");
 const { buildVenuSetupEmbed } = require("../src/eos/venuSetup");
@@ -174,13 +175,14 @@ test("/eos command returns a bounded safe message when EOS is unavailable", asyn
   try {
     await handleEosCommand(target, async () => {
       throw new EosApiError(`EOS API 502: ${"x".repeat(100_000)}`, 502);
-    });
+    }, { maxWaitMs: 1 });
   } finally {
     console.error = originalError;
   }
-  assert.equal(replies.length, 1);
-  assert.equal(replies[0].content, "EOS is temporarily unavailable. Please wait a moment and run the command again.");
-  assert.ok(replies[0].content.length < 200);
+  assert.equal(replies.length, 2);
+  assert.match(replies[0].content, /EOS is waking up/);
+  assert.equal(replies[1].content, "EOS is temporarily unavailable. Please wait a moment and run the command again.");
+  assert.ok(replies[1].content.length < 200);
 });
 
 test("/eos command does not reject if Discord rejects the fallback error response", async () => {
@@ -197,8 +199,63 @@ test("/eos command does not reject if Discord rejects the fallback error respons
   try {
     await assert.doesNotReject(() => handleEosCommand(target, async () => {
       throw new EosApiError("EOS API 502: unavailable", 502);
-    }));
+    }, { maxWaitMs: 1 }));
   } finally {
     console.error = originalError;
   }
+});
+
+test("EOS wake-up retries Render failures and then runs without another command", async () => {
+  let clock = 0;
+  let attempts = 0;
+  const replies = [];
+  const target = { editReply: async (value) => { replies.push(value); } };
+  await waitForEosReady(target, async (path) => {
+    assert.equal(path, "/health");
+    attempts += 1;
+    if (attempts < 3) throw new EosApiError("EOS API 502: unavailable", 502);
+    return { ok: true, service: "venu-engineering-os" };
+  }, {
+    now: () => clock,
+    wait: async (milliseconds) => { clock += milliseconds; },
+    maxWaitMs: 30_000,
+    retryMs: 5_000,
+  });
+  assert.equal(attempts, 3);
+  assert.equal(replies.length, 3);
+  assert.match(replies[0].content, /up to 30s remaining/);
+  assert.match(replies[2].content, /up to 20s remaining/);
+});
+
+test("EOS wake-up is bounded and preserves a safe retryable failure", async () => {
+  let clock = 0;
+  let attempts = 0;
+  const target = { editReply: async () => undefined };
+  await assert.rejects(
+    waitForEosReady(target, async () => {
+      attempts += 1;
+      throw new EosApiError("EOS API 502: unavailable", 502);
+    }, {
+      now: () => clock,
+      wait: async (milliseconds) => { clock += milliseconds; },
+      maxWaitMs: 30_000,
+      retryMs: 10_000,
+    }),
+    (error) => error instanceof EosApiError && error.status === 502,
+  );
+  assert.equal(attempts, 3);
+  assert.equal(clock, 30_000);
+});
+
+test("EOS wake-up does not retry permanent configuration errors", async () => {
+  let attempts = 0;
+  const target = { editReply: async () => undefined };
+  await assert.rejects(
+    waitForEosReady(target, async () => {
+      attempts += 1;
+      throw new EosApiError("EOS_API_URL and EOS_API_KEY must be configured", 0);
+    }),
+    /must be configured/,
+  );
+  assert.equal(attempts, 1);
 });
