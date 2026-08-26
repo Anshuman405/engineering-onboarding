@@ -3,6 +3,7 @@ require("dotenv").config();
 const EOS_API_URL = process.env.EOS_API_URL;
 const EOS_API_KEY = process.env.EOS_API_KEY;
 const DEFAULT_EOS_API_TIMEOUT_MS = 60_000;
+const MAX_EOS_ERROR_DETAIL_LENGTH = 300;
 
 class EosApiError extends Error {
   constructor(message, status, retryAfterMs) {
@@ -16,6 +17,24 @@ class EosApiError extends Error {
 function timeoutMs(value) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_EOS_API_TIMEOUT_MS;
+}
+
+function truncateErrorDetail(value, max = MAX_EOS_ERROR_DETAIL_LENGTH) {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return "request failed";
+  return normalized.length <= max ? normalized : `${normalized.slice(0, max - 3)}...`;
+}
+
+function responseErrorDetail(data) {
+  if (typeof data === "string") {
+    if (/<!doctype html|<html[\s>]/i.test(data)) return "upstream service returned an HTML error page";
+    return truncateErrorDetail(data);
+  }
+  if (data && typeof data === "object") {
+    const detail = data.error || data.message || data.detail;
+    if (typeof detail === "string") return truncateErrorDetail(detail);
+  }
+  return "request failed";
 }
 
 async function eosRequest(path, options = {}, request = fetch, config = {}) {
@@ -66,9 +85,7 @@ async function eosRequest(path, options = {}, request = fetch, config = {}) {
     const retryAfter = response.headers.get("retry-after");
     const retryAfterMs = retryAfter ? Math.max(0, Number(retryAfter) * 1000) : undefined;
     throw new EosApiError(
-      `EOS API ${response.status}: ${
-        typeof data === "string" ? data : JSON.stringify(data)
-      }`,
+      `EOS API ${response.status}: ${responseErrorDetail(data)}`,
       response.status,
       Number.isFinite(retryAfterMs) ? retryAfterMs : undefined,
     );
@@ -79,7 +96,10 @@ async function eosRequest(path, options = {}, request = fetch, config = {}) {
 
 module.exports = {
   DEFAULT_EOS_API_TIMEOUT_MS,
+  MAX_EOS_ERROR_DETAIL_LENGTH,
   EosApiError,
   eosRequest,
+  responseErrorDetail,
   timeoutMs,
+  truncateErrorDetail,
 };

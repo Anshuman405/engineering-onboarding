@@ -3,12 +3,14 @@ const test = require("node:test");
 const { Collection } = require("discord.js");
 const {
   eosCommand,
+  handleEosCommand,
   handleConnect,
   handleOnboarding,
   handleProfile,
   handleStatus,
   handleSync,
 } = require("../src/eos/commands");
+const { EosApiError } = require("../src/eos/client");
 const { buildVenuSetupEmbed } = require("../src/eos/venuSetup");
 
 function interaction(overrides = {}) {
@@ -155,4 +157,48 @@ test("/eos sync sends non-bot Product members without changing onboarding behavi
   assert.equal(payload.members[0].discordUserId, "400000000000000001");
   assert.equal(target.replies.length, 2);
   assert.equal(target.replies[1].embeds[0].toJSON().title, "Discord → EOS Sync Complete");
+});
+
+test("/eos command returns a bounded safe message when EOS is unavailable", async () => {
+  const replies = [];
+  const target = {
+    user: { id: "400000000000000001" },
+    options: { getSubcommand: () => "status" },
+    deferred: false,
+    replied: false,
+    deferReply: async () => { target.deferred = true; },
+    editReply: async (value) => { replies.push(value); return value; },
+  };
+  const originalError = console.error;
+  console.error = () => undefined;
+  try {
+    await handleEosCommand(target, async () => {
+      throw new EosApiError(`EOS API 502: ${"x".repeat(100_000)}`, 502);
+    });
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].content, "EOS is temporarily unavailable. Please wait a moment and run the command again.");
+  assert.ok(replies[0].content.length < 200);
+});
+
+test("/eos command does not reject if Discord rejects the fallback error response", async () => {
+  const target = {
+    user: { id: "400000000000000001" },
+    options: { getSubcommand: () => "status" },
+    deferred: false,
+    replied: false,
+    deferReply: async () => { target.deferred = true; },
+    editReply: async () => { throw new Error("Unknown interaction"); },
+  };
+  const originalError = console.error;
+  console.error = () => undefined;
+  try {
+    await assert.doesNotReject(() => handleEosCommand(target, async () => {
+      throw new EosApiError("EOS API 502: unavailable", 502);
+    }));
+  } finally {
+    console.error = originalError;
+  }
 });

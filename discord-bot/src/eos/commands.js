@@ -6,7 +6,7 @@ const {
   ButtonStyle,
 } = require("discord.js");
 
-const { eosRequest } = require("./client");
+const { EosApiError, eosRequest } = require("./client");
 
 const DOCUMENT_CATEGORIES = [
   "Architecture", "Development", "Setup", "Deployment", "Product", "Workflow",
@@ -136,6 +136,35 @@ function truncate(value, max = 1024) {
   }
 
   return `${stringValue.slice(0, max - 3)}...`;
+}
+
+function publicEosErrorMessage(error) {
+  if (error instanceof EosApiError) {
+    if (error.status === 0 || error.status >= 500) {
+      return "EOS is temporarily unavailable. Please wait a moment and run the command again.";
+    }
+    if (error.status === 429) {
+      return "EOS is temporarily rate limited. Please wait a moment and try again.";
+    }
+    return `EOS could not complete the request (HTTP ${error.status}).`;
+  }
+  return "EOS could not complete the command. Please try again.";
+}
+
+async function sendCommandError(interaction, error) {
+  const response = {
+    content: publicEosErrorMessage(error),
+    embeds: [],
+    components: [],
+    allowedMentions: { parse: [] },
+  };
+  try {
+    if (interaction.deferred || interaction.replied) return await interaction.editReply(response);
+    return await interaction.reply({ ...response, ephemeral: true });
+  } catch (replyError) {
+    console.error("Could not deliver EOS command error response:", replyError?.message || "Discord API error");
+    return undefined;
+  }
 }
 
 /*
@@ -745,26 +774,8 @@ async function handleEosCommand(interaction, request = eosRequest) {
         });
     }
   } catch (error) {
-    console.error("EOS command error:", error);
-
-    const message =
-      error?.message ||
-      "An unexpected EOS error occurred.";
-
-    /*
-     * If the interaction has already been deferred/replied,
-     * edit the existing response.
-     */
-    if (interaction.deferred || interaction.replied) {
-      return interaction.editReply({
-        content: `EOS error: ${message}`,
-      });
-    }
-
-    return interaction.reply({
-      content: `EOS error: ${message}`,
-      ephemeral: true,
-    });
+    console.error("EOS command failed:", error?.message || "Unknown EOS error");
+    return sendCommandError(interaction, error);
   }
 }
 
@@ -778,6 +789,8 @@ module.exports = {
   handleSync,
   handleDocument,
   handleDocs,
+  publicEosErrorMessage,
+  sendCommandError,
   parseDocumentTags,
   githubRelationFromUrl,
   downloadDiscordAttachment,

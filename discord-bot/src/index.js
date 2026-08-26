@@ -153,7 +153,13 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.commandName === "eos") {
-        await handleEosCommand(interaction);
+        try {
+            await handleEosCommand(interaction);
+        } catch (error) {
+            // Command handlers must never reject into EventEmitter; Node treats
+            // an unhandled listener rejection as a fatal process error.
+            console.error("Unhandled EOS interaction failure:", error?.message || "Unknown Discord API error");
+        }
     }
 
     if (interaction.commandName === "status") {
