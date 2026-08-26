@@ -7,6 +7,7 @@ const {
   handleConnect,
   handleOnboarding,
   handleProfile,
+  handleSearch,
   handleStatus,
   handleSync,
   waitForEosReady,
@@ -29,14 +30,83 @@ test("/eos status renders the authenticated EOS status response", async () => {
   const target = interaction();
   await handleStatus(target, async (path) => {
     assert.equal(path, "/api/eos/status");
-    return { data: { engineers: 3, onboarding: 1, activeTasks: 2, blockedTasks: 1, unassignedTasks: 4, recentEvents: 9, database: "connected", discord: { messages: 12, latestIngestion: { status: "COMPLETED" } } } };
+    return { data: {
+      engineers: 3,
+      onboarding: 1,
+      activeTasks: 2,
+      blockedTasks: 1,
+      unassignedTasks: 4,
+      recentEvents: 9,
+      database: "connected",
+      github: { connected: false },
+      discord: { connected: true, servers: 1, channels: 14, activeMembers: 22 },
+      documents: { active: 8, indexed: 7, storageConfigured: true },
+      knowledge: { active: 5 },
+      intelligence: { configured: false },
+    } };
   });
   const embed = target.replies[0].embeds[0].toJSON();
   assert.equal(embed.title, "Engineering OS Status");
   assert.equal(embed.fields.find((field) => field.name === "Engineers").value, "3");
   assert.equal(embed.fields.find((field) => field.name === "Database").value, "Connected");
-  assert.equal(embed.fields.find((field) => field.name === "Discord Messages").value, "12");
-  assert.equal(embed.fields.find((field) => field.name === "Discord Ingestion").value, "COMPLETED");
+  assert.equal(embed.fields.find((field) => field.name === "Discord").value, "Live retrieval ready");
+  assert.equal(embed.fields.find((field) => field.name === "Discord Metadata").value, "1 servers • 14 channels • 22 members");
+  assert.equal(embed.fields.find((field) => field.name === "Documentation").value, "7/8 indexed • storage ready");
+  assert.equal(embed.fields.find((field) => field.name === "GitHub").value, "Waiting for token");
+});
+
+test("/eos search is registered with one bounded query option", () => {
+  const search = eosCommand.toJSON().options.find((option) => option.name === "search");
+  assert.ok(search);
+  assert.equal(search.options.length, 1);
+  assert.equal(search.options[0].name, "query");
+  assert.equal(search.options[0].required, true);
+  assert.equal(search.options[0].min_length, 2);
+  assert.equal(search.options[0].max_length, 500);
+});
+
+test("/eos search requests bounded context scoped to the current Discord channel", async () => {
+  const target = interaction({
+    guildId: "319922397899915264",
+    channelId: "319932292447338517",
+    options: { getString: (name) => name === "query" ? "campaign manager" : null },
+  });
+  let call;
+  await handleSearch(target, async (path, options) => {
+    call = { path, options };
+    return { data: {
+      documents: [{ title: "Campaign architecture", url: "https://docs.google.com/document/d/example", category: "Architecture" }],
+      tasks: [{ title: "Finish campaign manager", status: "IN_PROGRESS", owner: { name: "Alex" }, github: { url: "https://github.com/Venu/repo/issues/12" } }],
+      github: { issues: [], pullRequests: [{ title: "Campaign fix", url: "https://github.com/Venu/repo/pull/13" }], commits: [] },
+      engineers: [],
+      knowledge: [],
+      discord: { messages: [{ content: "Use the new campaign pipeline", url: "https://discord.com/channels/1/2/3", occurredAt: "2026-08-26T10:00:00.000Z" }] },
+      warnings: [],
+    } };
+  });
+  assert.equal(call.path, "/api/context/relevant");
+  assert.deepEqual(JSON.parse(call.options.body), {
+    query: "campaign manager",
+    serverId: "319922397899915264",
+    channelId: "319932292447338517",
+    includeDiscord: true,
+    limit: 6,
+  });
+  const embed = target.replies[0].embeds[0].toJSON();
+  assert.match(embed.description, /Documentation/);
+  assert.match(embed.description, /Tasks/);
+  assert.match(embed.description, /GitHub/);
+  assert.match(embed.description, /Live Discord/);
+});
+
+test("/eos search reports a useful empty state", async () => {
+  const target = interaction({
+    options: { getString: () => "missing topic" },
+  });
+  await handleSearch(target, async () => ({ data: {
+    documents: [], knowledge: [], tasks: [], github: { issues: [], pullRequests: [], commits: [] }, engineers: [], discord: null, warnings: [],
+  } }));
+  assert.match(target.replies[0].content, /No connected engineering context matched/);
 });
 
 test("/eos profile renders Engineer and onboarding data", async () => {

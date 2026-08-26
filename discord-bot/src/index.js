@@ -29,8 +29,14 @@ const {
     handleStatusRefresh
 } = require("./status/command");
 const { StatusMonitorManager } = require("./status/monitor");
+const { registerGuildCommands } = require("./discordStartup");
 
 const statusMonitor = new StatusMonitorManager();
+const discordRuntime = {
+    ready: false,
+    commandsRegistered: false,
+    lastStartupError: null
+};
 
 
 
@@ -56,10 +62,10 @@ const client = new Client({
 client.once(
     "clientReady",
     async () => {
+        discordRuntime.ready = true;
+        console.log(`Bot online: ${client.user.tag}`);
 
-        console.log(
-            `Bot online: ${client.user.tag}`
-        );
+        try {
 
 
         const guild =
@@ -69,13 +75,9 @@ client.once(
 
 
         if (!guild) {
-
-            console.log(
-                "Guild not found"
-            );
-
+            discordRuntime.lastStartupError = "Configured guild was not found";
+            console.error("Configured Discord guild was not found");
             return;
-
         }
 
 
@@ -108,21 +110,26 @@ client.once(
             process.env.DISCORD_TOKEN
         );
 
-        await rest.put(
+        await registerGuildCommands(
+            rest,
             Routes.applicationGuildCommands(
                 client.user.id,
                 process.env.GUILD_ID
             ),
-            {
-                body: [
-                    eosCommand.toJSON(),
-                    statusCommand.toJSON()
-                ]
-            }
+            [
+                eosCommand.toJSON(),
+                statusCommand.toJSON()
+            ]
         );
 
+        discordRuntime.commandsRegistered = true;
+        discordRuntime.lastStartupError = null;
         console.log("Registered /eos and /status commands");
-
+        } catch (error) {
+            discordRuntime.commandsRegistered = false;
+            discordRuntime.lastStartupError = error?.message || "Discord startup failed";
+            console.error("Discord startup initialization failed; bot process will remain available:", error?.message || "unknown error");
+        }
     }
 );
 
@@ -601,6 +608,21 @@ ${data.github}
 
 
 app.get(
+    "/health",
+    (req,res)=>{
+        res.json({
+            ok: true,
+            service: "venu-engineering-onboarding",
+            discordReady: discordRuntime.ready && client.isReady(),
+            commandsRegistered: discordRuntime.commandsRegistered,
+            startupStatus: discordRuntime.lastStartupError ? "degraded" : "ready"
+        });
+    }
+);
+
+
+
+app.get(
     "/",
     (req,res)=>{
 
@@ -648,4 +670,7 @@ process.once("SIGINT", () => void shutdown());
 
 client.login(
     process.env.DISCORD_TOKEN
-);
+).catch((error) => {
+    discordRuntime.lastStartupError = error?.message || "Discord login failed";
+    console.error("Discord login failed; HTTP diagnostics remain available:", error?.message || "unknown error");
+});

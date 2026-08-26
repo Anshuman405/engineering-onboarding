@@ -120,6 +120,18 @@ const eosCommand = new SlashCommandBuilder()
       .addStringOption((option) => option.setName("category").setDescription("Optional category filter").addChoices(
         ...DOCUMENT_CATEGORIES.map((category) => ({ name: category, value: category }))
       ))
+  )
+
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName("search")
+      .setDescription("Search connected engineering context")
+      .addStringOption((option) => option
+        .setName("query")
+        .setDescription("Question or engineering topic")
+        .setRequired(true)
+        .setMinLength(2)
+        .setMaxLength(500))
   );
 
 /*
@@ -274,13 +286,33 @@ async function handleStatus(interaction, request = eosRequest) {
         inline: true,
       },
       {
-        name: "Discord Messages",
-        value: String(status.discord?.messages ?? 0),
+        name: "GitHub",
+        value: status.github?.connected ? "Ready" : "Waiting for token",
         inline: true,
       },
       {
-        name: "Discord Ingestion",
-        value: truncate(status.discord?.latestIngestion?.status ?? "No batches"),
+        name: "Discord",
+        value: status.discord?.connected ? "Live retrieval ready" : "Metadata available",
+        inline: true,
+      },
+      {
+        name: "Discord Metadata",
+        value: `${status.discord?.servers ?? 0} servers • ${status.discord?.channels ?? 0} channels • ${status.discord?.activeMembers ?? 0} members`,
+        inline: true,
+      },
+      {
+        name: "Documentation",
+        value: `${status.documents?.indexed ?? 0}/${status.documents?.active ?? 0} indexed${status.documents?.storageConfigured ? " • storage ready" : ""}`,
+        inline: true,
+      },
+      {
+        name: "Knowledge",
+        value: `${status.knowledge?.active ?? 0} active entries`,
+        inline: true,
+      },
+      {
+        name: "AI",
+        value: status.intelligence?.configured ? "Ready" : "Waiting for provider key",
         inline: true,
       }
     )
@@ -782,6 +814,61 @@ async function handleDocs(interaction, request = eosRequest) {
   return interaction.editReply({ embeds: [new EmbedBuilder().setTitle("EOS documentation search").setDescription(lines.join("\n").slice(0, 4000)).setFooter({ text: `Query: ${truncate(query, 200)}` }).setTimestamp()], allowedMentions: { parse: [] } });
 }
 
+function contextResultLines(data) {
+  const lines = [];
+  const add = (label, entries, formatter) => {
+    if (!entries?.length) return;
+    lines.push(`**${label}**`);
+    for (const entry of entries) lines.push(`• ${formatter(entry)}`);
+  };
+  const linked = (title, url) => url
+    ? `[${truncate(title, 100).replace(/[\[\]]/g, "")}](${url})`
+    : `**${truncate(title, 100)}**`;
+
+  add("Documentation", data.documents, (item) => `${linked(item.title, item.url)}${item.category ? ` — ${item.category}` : ""}`);
+  add("Knowledge", data.knowledge, (item) => `${linked(item.title, item.sources?.[0]?.sourceUrl)}${item.origin ? ` — ${item.origin}` : ""}`);
+  add("Tasks", data.tasks, (item) => `${linked(item.title, item.github?.url)} — ${item.status}${item.owner?.name ? ` • ${item.owner.name}` : ""}`);
+  const github = [
+    ...(data.github?.issues || []).map((item) => ({ ...item, resultType: "Issue" })),
+    ...(data.github?.pullRequests || []).map((item) => ({ ...item, resultType: "PR" })),
+    ...(data.github?.commits || []).map((item) => ({ ...item, title: item.message || item.sha, resultType: "Commit" })),
+  ];
+  add("GitHub", github, (item) => `${linked(item.title || item.sha, item.url)} — ${item.resultType}`);
+  add("People", data.engineers, (item) => `${item.name}${item.githubUsername ? ` — @${item.githubUsername}` : ""}`);
+  add("Live Discord", data.discord?.messages, (item) => `${linked(truncate(item.content || "Discord message", 120), item.url)}${item.occurredAt ? ` — <t:${Math.floor(new Date(item.occurredAt).getTime() / 1000)}:R>` : ""}`);
+
+  if (data.warnings?.length) lines.push(`_${truncate(data.warnings.join(" "), 500)}_`);
+  return lines;
+}
+
+async function handleSearch(interaction, request = eosRequest) {
+  const query = interaction.options.getString("query", true).trim();
+  const result = await request("/api/context/relevant", {
+    method: "POST",
+    body: JSON.stringify({
+      query,
+      serverId: interaction.guildId || undefined,
+      channelId: interaction.guildId ? interaction.channelId : undefined,
+      includeDiscord: Boolean(interaction.guildId),
+      limit: 6,
+    }),
+  });
+  const data = result.data || result;
+  const lines = contextResultLines(data);
+  if (!lines.length) {
+    return interaction.editReply({
+      content: `No connected engineering context matched **${truncate(query, 200)}**.`,
+      allowedMentions: { parse: [] },
+    });
+  }
+  const embed = new EmbedBuilder()
+    .setTitle("EOS engineering context")
+    .setDescription(lines.join("\n").slice(0, 4000))
+    .setFooter({ text: `Query: ${truncate(query, 200)}` })
+    .setTimestamp();
+  return interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
+}
+
 /*
 |--------------------------------------------------------------------------
 | Main command handler
@@ -798,7 +885,7 @@ async function handleEosCommand(interaction, request = eosRequest, wakeOptions =
      * longer than Discord's initial interaction window.
      */
     await interaction.deferReply({
-      ephemeral: ["onboarding", "document", "docs"].includes(subcommand),
+      ephemeral: ["onboarding", "document", "docs", "search"].includes(subcommand),
     });
 
     await waitForEosReady(interaction, request, wakeOptions);
@@ -825,6 +912,9 @@ async function handleEosCommand(interaction, request = eosRequest, wakeOptions =
       case "docs":
         return await handleDocs(interaction, request);
 
+      case "search":
+        return await handleSearch(interaction, request);
+
       default:
         return interaction.editReply({
           content: "Unknown EOS command.",
@@ -846,6 +936,8 @@ module.exports = {
   handleSync,
   handleDocument,
   handleDocs,
+  handleSearch,
+  contextResultLines,
   publicEosErrorMessage,
   sendCommandError,
   waitForEosReady,

@@ -4,6 +4,8 @@ The existing bot continues to manage onboarding, member identity synchronization
 
 Engineers can run `/eos onboarding` with their GitHub username and email. The command privately links those values to EOS and provides the configured Tally form. When the existing Tally callback successfully processes the form, the bot marks EOS onboarding complete and DMs the engineer the Venu 1.x local-development checklist.
 
+`/eos search query:...` privately searches one bounded engineering-context package: documentation, durable knowledge, tasks, ownership, GitHub records, and relevant live messages from the current Discord channel. It returns source links and continues to return durable EOS results when Discord is temporarily unavailable. Live Discord message content is not written to Neon.
+
 Copy `discord-bot/.env.example` to `discord-bot/.env`, preserve the existing onboarding settings, and configure:
 
 ```env
@@ -42,7 +44,9 @@ STATUS_HTTP_TIMEOUT_MS=10000
 
 Checks use lightweight `HEAD` requests, bounded timeouts, and expected HTTP 200 responses. The production branch does not currently expose `/health/`; its public Django admin login page is the verified temporary health target. Backport the repository's `/health/` route to production and update `STATUS_PRODUCTION_BACKEND_URL` when deployed.
 
-Sessions are intentionally not persisted for a 30-minute display feature. Graceful shutdown attempts to mark every active message as restarting and clears all timers. An abrupt platform termination cannot recover an old session; users must run `/status` again. Render must use an always-on instance for guaranteed 24/7 Discord availability—the current Free web-service plan is not a 24/7 availability guarantee.
+Sessions are intentionally not persisted for a 30-minute display feature. Graceful shutdown attempts to mark every active message as restarting and clears all timers. An abrupt platform termination cannot recover an old session; users must run `/status` again. On Render Free, `/eos` commands immediately acknowledge an interaction, show bounded wake-up progress, retry the sleeping EOS service, and automatically continue when it is ready. The Discord gateway bot itself still needs a running process; Free hosting cannot guarantee uninterrupted 24/7 uptime.
+
+The bot exposes `GET /health` for operational diagnostics. It reports Discord gateway readiness and slash-command registration separately while keeping the HTTP process alive in a degraded state. Transient Discord registration failures receive a bounded retry; a permanent startup error is logged without becoming an unhandled rejection that crashes Node.
 
 Run integration/publisher contract tests and syntax checks with:
 

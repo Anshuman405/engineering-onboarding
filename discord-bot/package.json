@@ -5,7 +5,7 @@
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test tests/**/*.test.js",
-    "check": "node --check src/index.js && node --check src/onboardingWebhook.js && node --check src/eos/client.js && node --check src/eos/discordPublisher.js && node --check src/eos/commands.js && node --check src/eos/venuSetup.js && node --check src/status/config.js && node --check src/status/healthChecker.js && node --check src/status/formatter.js && node --check src/status/monitor.js && node --check src/status/command.js"
+    "check": "node --check src/index.js && node --check src/discordStartup.js && node --check src/onboardingWebhook.js && node --check src/eos/client.js && node --check src/eos/discordPublisher.js && node --check src/eos/commands.js && node --check src/eos/venuSetup.js && node --check src/status/config.js && node --check src/status/healthChecker.js && node --check src/status/formatter.js && node --check src/status/monitor.js && node --check src/status/command.js"
   },
   "dependencies": {
     "discord.js": "^14.27.0",
