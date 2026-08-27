@@ -375,6 +375,7 @@ async function handleProfile(interaction, request = eosRequest) {
   const engineer = result.engineer || result.data?.engineer;
   const onboarding =
     result.onboarding || result.data?.onboarding;
+  const githubActivity = result.githubActivity || result.data?.githubActivity;
 
   if (!engineer) {
     return interaction.editReply({
@@ -383,6 +384,7 @@ async function handleProfile(interaction, request = eosRequest) {
     });
   }
 
+  const activityFields = githubProfileFields(githubActivity);
   const embed = new EmbedBuilder()
     .setTitle("Your Engineering OS Profile")
     .setDescription(
@@ -430,13 +432,77 @@ async function handleProfile(interaction, request = eosRequest) {
       {
         name: "Next step",
         value: onboardingNextStep(onboarding),
-      }
+      },
+      ...activityFields
     )
+    .setFooter({ text: "GitHub-verifiable milestones update automatically; local setup remains self-reported." })
     .setTimestamp();
 
   await interaction.editReply({
     embeds: [embed],
   });
+}
+
+function safeProfileLink(title, url) {
+  const label = truncate(title, 80).replace(/[\[\]]/g, "");
+  return /^https:\/\//i.test(url || "") ? `[${label}](${url})` : label;
+}
+
+function githubProfileFields(activity) {
+  if (activity?.temporarilyUnavailable) {
+    return [{ name: "GitHub activity", value: "GitHub activity is temporarily unavailable. Your EOS profile and existing checklist remain available." }];
+  }
+  if (!activity?.configured) {
+    return [{ name: "GitHub activity", value: "Waiting for the EOS GitHub token. Your connected GitHub identity is preserved." }];
+  }
+  if (!activity.identityConnected) {
+    return [{ name: "GitHub activity", value: "Run `/eos connect type:GitHub` so EOS can associate repository activity with you." }];
+  }
+  if (!activity.dataAvailable) {
+    return [{ name: "GitHub activity", value: "GitHub is connected. The initial repository sync is pending." }];
+  }
+
+  const currentPullRequests = (activity.pullRequests?.current || []).slice(0, 3);
+  const requestedReviews = (activity.reviews?.requested || []).slice(0, 3);
+  const currentTasks = (activity.tasks?.current || []).slice(0, 3);
+  const work = [];
+  if (currentTasks.length) {
+    work.push("**Assigned work**", ...currentTasks.map((task) => `• ${safeProfileLink(task.title, task.githubUrl)} — ${task.status}`));
+  }
+  if (currentPullRequests.length) {
+    work.push("**Open PRs**", ...currentPullRequests.map((pr) => `• ${safeProfileLink(`${pr.repository?.fullName || "Repository"} #${pr.number}: ${pr.title}`, pr.url)}${pr.isDraft ? " — Draft" : ""}`));
+  }
+  if (requestedReviews.length) {
+    work.push("**Reviews requested**", ...requestedReviews.map((pr) => `• ${safeProfileLink(`${pr.repository?.fullName || "Repository"} #${pr.number}: ${pr.title}`, pr.url)}`));
+  }
+
+  return [
+    {
+      name: "Commits",
+      value: `24h: **${activity.commits?.day ?? 0}** • 7d: **${activity.commits?.week ?? 0}** • 30d: **${activity.commits?.month ?? 0}** • Total: **${activity.commits?.all ?? 0}**`,
+    },
+    {
+      name: "Pull requests",
+      value: `Open: **${activity.pullRequests?.open ?? 0}** • Closed: **${activity.pullRequests?.closed ?? 0}** • Merged: **${activity.pullRequests?.merged ?? 0}**`,
+      inline: true,
+    },
+    {
+      name: "Reviews",
+      value: `Requested: **${activity.reviews?.requested?.length ?? 0}** • Submitted 30d: **${activity.reviews?.month ?? 0}** • Total: **${activity.reviews?.all ?? 0}**`,
+      inline: true,
+    },
+    {
+      name: "Tasks",
+      value: `Active: **${activity.tasks?.active ?? 0}** • Completed: **${activity.tasks?.completed ?? 0}**`,
+      inline: true,
+    },
+    ...(work.length ? [{ name: "Current GitHub work", value: truncate(work.join("\n"), 1024) }] : []),
+    {
+      name: "GitHub data refreshed",
+      value: activity.lastSyncedAt ? `<t:${Math.floor(new Date(activity.lastSyncedAt).getTime() / 1000)}:R>` : "Initial sync pending",
+      inline: true,
+    },
+  ];
 }
 
 const ONBOARDING_STEP_LABELS = {
@@ -1069,5 +1135,6 @@ module.exports = {
   normalizeGitHubUsername,
   onboardingChecklist,
   onboardingNextStep,
+  githubProfileFields,
   PRIVATE_EOS_SUBCOMMANDS,
 };

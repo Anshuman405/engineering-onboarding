@@ -13,6 +13,7 @@ const {
   handleSync,
   normalizeGitHubUsername,
   onboardingNextStep,
+  githubProfileFields,
   PRIVATE_EOS_SUBCOMMANDS,
   waitForEosReady,
 } = require("../src/eos/commands");
@@ -117,13 +118,48 @@ test("/eos profile renders Engineer and onboarding data", async () => {
   const target = interaction();
   await handleProfile(target, async (path) => {
     assert.equal(path, "/api/engineers/profile/400000000000000001");
-    return { engineer: { name: "Alex", status: "ACTIVE", email: "alex@example.test", githubUsername: "alex-gh", discordUserId: target.user.id }, onboarding: { status: "COMPLETED", repositoryAccess: false, environmentSetup: false, firstTaskGiven: false, firstFixShipped: false } };
+    return {
+      engineer: { name: "Alex", status: "ACTIVE", email: "alex@example.test", githubUsername: "alex-gh", discordUserId: target.user.id },
+      onboarding: { status: "COMPLETED", repositoryAccess: true, environmentSetup: false, firstTaskGiven: true, firstFixShipped: true },
+      githubActivity: {
+        configured: true,
+        identityConnected: true,
+        dataAvailable: true,
+        lastSyncedAt: "2026-08-27T12:00:00.000Z",
+        commits: { day: 2, week: 8, month: 20, all: 50 },
+        pullRequests: { open: 2, closed: 3, merged: 4, current: [] },
+        reviews: { month: 5, all: 12, requested: [] },
+        tasks: { active: 1, completed: 7, current: [] },
+      },
+    };
   });
   const embed = target.replies[0].embeds[0].toJSON();
   assert.equal(embed.fields.find((field) => field.name === "Onboarding").value, "COMPLETED");
   assert.match(embed.fields.find((field) => field.name === "GitHub").value, /alex-gh/);
-  assert.match(embed.fields.find((field) => field.name === "Next step").value, /Jeremy/);
-  assert.match(embed.fields.find((field) => field.name === "Engineering checklist").value, /⬜ VenuAI repository access/);
+  assert.match(embed.fields.find((field) => field.name === "Next step").value, /Set up Venu 1\.x/);
+  assert.match(embed.fields.find((field) => field.name === "Engineering checklist").value, /✅ VenuAI repository access/);
+  assert.match(embed.fields.find((field) => field.name === "Commits").value, /24h: \*\*2\*\*/);
+  assert.match(embed.fields.find((field) => field.name === "Pull requests").value, /Merged: \*\*4\*\*/);
+});
+
+test("GitHub profile fields explain disabled, pending, and active states", () => {
+  assert.match(githubProfileFields({ temporarilyUnavailable: true })[0].value, /temporarily unavailable/);
+  assert.match(githubProfileFields({ configured: false })[0].value, /Waiting for the EOS GitHub token/);
+  assert.match(githubProfileFields({ configured: true, identityConnected: false })[0].value, /eos connect/);
+  assert.match(githubProfileFields({ configured: true, identityConnected: true, dataAvailable: false })[0].value, /initial repository sync is pending/);
+
+  const fields = githubProfileFields({
+    configured: true,
+    identityConnected: true,
+    dataAvailable: true,
+    lastSyncedAt: "2026-08-27T12:00:00.000Z",
+    commits: { day: 1, week: 2, month: 3, all: 4 },
+    pullRequests: { open: 1, closed: 2, merged: 3, current: [{ number: 9, title: "Ship feature", url: "https://github.com/acme/app/pull/9", repository: { fullName: "acme/app" } }] },
+    reviews: { month: 4, all: 5, requested: [{ number: 10, title: "Review me", url: "https://github.com/acme/app/pull/10", repository: { fullName: "acme/app" } }] },
+    tasks: { active: 2, completed: 6, current: [{ title: "Fix issue", status: "IN_PROGRESS", githubUrl: "https://github.com/acme/app/issues/1" }] },
+  });
+  assert.match(fields.find((field) => field.name === "Current GitHub work").value, /Reviews requested/);
+  assert.ok(fields.every((field) => field.value.length <= 1024));
 });
 
 test("/eos progress is registered with bounded milestone and state choices", () => {
