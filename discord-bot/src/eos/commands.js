@@ -18,7 +18,7 @@ const DEFAULT_EOS_WAKE_RETRY_MS = 2_000;
 const DEFAULT_EOS_WAKE_PROGRESS_MS = 5_000;
 const DEFAULT_VENU_PRODUCT_URL = "https://ai.venu3d.com/";
 const DEFAULT_VENU_REPOSITORY_URL = "https://github.com/RoboBearLLC/VenuAI";
-const PRIVATE_EOS_SUBCOMMANDS = new Set(["profile", "connect", "onboarding", "document", "docs", "search"]);
+const PRIVATE_EOS_SUBCOMMANDS = new Set(["profile", "connect", "onboarding", "progress", "document", "docs", "search"]);
 
 /*
 |--------------------------------------------------------------------------
@@ -85,6 +85,33 @@ const eosCommand = new SlashCommandBuilder()
           .setName("email")
           .setDescription("Your email address")
           .setRequired(true)
+      )
+  )
+
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName("progress")
+      .setDescription("Mark an engineering onboarding milestone complete or incomplete")
+      .addStringOption((option) =>
+        option
+          .setName("step")
+          .setDescription("Onboarding milestone")
+          .setRequired(true)
+          .addChoices(
+            { name: "VenuAI repository access", value: "repository_access" },
+            { name: "Venu 1.x local setup", value: "environment_setup" },
+            { name: "First task claimed", value: "first_task" },
+            { name: "First fix shipped", value: "first_fix" }
+          )
+      )
+      .addStringOption((option) =>
+        option
+          .setName("state")
+          .setDescription("Defaults to complete")
+          .addChoices(
+            { name: "Complete", value: "complete" },
+            { name: "Not complete", value: "not_complete" }
+          )
       )
   )
 
@@ -397,18 +424,62 @@ async function handleProfile(interaction, request = eosRequest) {
         inline: true,
       },
       {
+        name: "Engineering checklist",
+        value: onboardingChecklist(onboarding).join("\n"),
+      },
+      {
         name: "Next step",
-        value: !onboarding
-          ? "Run `/eos onboarding` to create your guided checklist."
-          : onboarding.status !== "COMPLETED"
-            ? "Run `/eos onboarding` and complete the linked Venu form."
-            : "Confirm VenuAI repository access with Jeremy, set up Venu 1.x, then claim your first-week bug or pain point.",
+        value: onboardingNextStep(onboarding),
       }
     )
     .setTimestamp();
 
   await interaction.editReply({
     embeds: [embed],
+  });
+}
+
+const ONBOARDING_STEP_LABELS = {
+  repository_access: "VenuAI repository access",
+  environment_setup: "Venu 1.x local setup",
+  first_task: "First task claimed",
+  first_fix: "First fix shipped",
+};
+
+function onboardingChecklist(onboarding) {
+  if (!onboarding) return ["⬜ Run `/eos onboarding` to create your checklist"];
+  return [
+    `${onboarding.repositoryAccess ? "✅" : "⬜"} VenuAI repository access`,
+    `${onboarding.environmentSetup ? "✅" : "⬜"} Venu 1.x local setup`,
+    `${onboarding.firstTaskGiven ? "✅" : "⬜"} First task claimed`,
+    `${onboarding.firstFixShipped ? "✅" : "⬜"} First fix shipped`,
+  ];
+}
+
+function onboardingNextStep(onboarding) {
+  if (!onboarding) return "Run `/eos onboarding` to create your guided checklist.";
+  if (onboarding.status !== "COMPLETED") return "Run `/eos onboarding` and complete the linked Venu form.";
+  if (!onboarding.repositoryAccess) return "Wait for Jeremy to grant VenuAI repository access. Once it opens, run `/eos progress step:VenuAI repository access`.";
+  if (!onboarding.environmentSetup) return "Set up Venu 1.x, then run `/eos progress step:Venu 1.x local setup`.";
+  if (!onboarding.firstTaskGiven) return "Use Venu, identify and claim a bug or pain point, then mark First task claimed with `/eos progress`.";
+  if (!onboarding.firstFixShipped) return "Ship your first fix within one week, then mark First fix shipped with `/eos progress`.";
+  return "Your engineering onboarding checklist is complete. Keep `/eos profile` current as your work progresses.";
+}
+
+async function handleProgress(interaction, request = eosRequest) {
+  const step = interaction.options.getString("step", true);
+  const completed = interaction.options.getString("state") !== "not_complete";
+  const label = ONBOARDING_STEP_LABELS[step];
+  if (!label) return interaction.editReply({ content: "Unknown onboarding milestone." });
+
+  const result = await request(
+    `/api/engineers/profile/${encodeURIComponent(interaction.user.id)}/onboarding-progress`,
+    { method: "PATCH", body: JSON.stringify({ step, completed }) }
+  );
+  const onboarding = result.onboarding || result.data?.onboarding;
+  return interaction.editReply({
+    content: `${completed ? "✅ Marked complete" : "⬜ Marked not complete"}: **${label}**\n\n${onboardingChecklist(onboarding).join("\n")}\n\nRun \`/eos profile\` to see your next step.`,
+    allowedMentions: { parse: [] },
   });
 }
 
@@ -950,6 +1021,9 @@ async function handleEosCommand(interaction, request = eosRequest, wakeOptions =
       case "onboarding":
         return await handleOnboarding(interaction, request);
 
+      case "progress":
+        return await handleProgress(interaction, request);
+
       case "sync":
         return await handleSync(interaction, request);
 
@@ -980,6 +1054,7 @@ module.exports = {
   handleProfile,
   handleConnect,
   handleOnboarding,
+  handleProgress,
   handleSync,
   handleDocument,
   handleDocs,
@@ -992,5 +1067,7 @@ module.exports = {
   githubRelationFromUrl,
   downloadDiscordAttachment,
   normalizeGitHubUsername,
+  onboardingChecklist,
+  onboardingNextStep,
   PRIVATE_EOS_SUBCOMMANDS,
 };

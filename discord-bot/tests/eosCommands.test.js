@@ -6,11 +6,13 @@ const {
   handleEosCommand,
   handleConnect,
   handleOnboarding,
+  handleProgress,
   handleProfile,
   handleSearch,
   handleStatus,
   handleSync,
   normalizeGitHubUsername,
+  onboardingNextStep,
   PRIVATE_EOS_SUBCOMMANDS,
   waitForEosReady,
 } = require("../src/eos/commands");
@@ -115,12 +117,49 @@ test("/eos profile renders Engineer and onboarding data", async () => {
   const target = interaction();
   await handleProfile(target, async (path) => {
     assert.equal(path, "/api/engineers/profile/400000000000000001");
-    return { engineer: { name: "Alex", status: "ACTIVE", email: "alex@example.test", githubUsername: "alex-gh", discordUserId: target.user.id }, onboarding: { status: "COMPLETED" } };
+    return { engineer: { name: "Alex", status: "ACTIVE", email: "alex@example.test", githubUsername: "alex-gh", discordUserId: target.user.id }, onboarding: { status: "COMPLETED", repositoryAccess: false, environmentSetup: false, firstTaskGiven: false, firstFixShipped: false } };
   });
   const embed = target.replies[0].embeds[0].toJSON();
   assert.equal(embed.fields.find((field) => field.name === "Onboarding").value, "COMPLETED");
   assert.match(embed.fields.find((field) => field.name === "GitHub").value, /alex-gh/);
   assert.match(embed.fields.find((field) => field.name === "Next step").value, /Jeremy/);
+  assert.match(embed.fields.find((field) => field.name === "Engineering checklist").value, /⬜ VenuAI repository access/);
+});
+
+test("/eos progress is registered with bounded milestone and state choices", () => {
+  const progress = eosCommand.toJSON().options.find((option) => option.name === "progress");
+  assert.ok(progress);
+  assert.deepEqual(progress.options.map((option) => option.name), ["step", "state"]);
+  assert.equal(progress.options[0].choices.length, 4);
+  assert.equal(progress.options[1].required, false);
+});
+
+test("/eos progress marks and unmarks milestones through the profile API", async () => {
+  const calls = [];
+  for (const state of [null, "not_complete"]) {
+    const target = interaction({
+      options: { getString: (name) => name === "step" ? "repository_access" : state },
+    });
+    await handleProgress(target, async (path, options) => {
+      calls.push({ path, body: JSON.parse(options.body) });
+      return { onboarding: { repositoryAccess: state !== "not_complete" } };
+    });
+    assert.match(target.replies[0].content, state ? /Marked not complete/ : /Marked complete/);
+  }
+  assert.equal(calls[0].path, "/api/engineers/profile/400000000000000001/onboarding-progress");
+  assert.deepEqual(calls.map((call) => call.body), [
+    { step: "repository_access", completed: true },
+    { step: "repository_access", completed: false },
+  ]);
+});
+
+test("profile next steps advance through the engineering checklist", () => {
+  const completedForm = { status: "COMPLETED", repositoryAccess: false, environmentSetup: false, firstTaskGiven: false, firstFixShipped: false };
+  assert.match(onboardingNextStep(completedForm), /Jeremy/);
+  assert.match(onboardingNextStep({ ...completedForm, repositoryAccess: true }), /Set up Venu 1\.x/);
+  assert.match(onboardingNextStep({ ...completedForm, repositoryAccess: true, environmentSetup: true }), /identify and claim/);
+  assert.match(onboardingNextStep({ ...completedForm, repositoryAccess: true, environmentSetup: true, firstTaskGiven: true }), /Ship your first fix/);
+  assert.match(onboardingNextStep({ ...completedForm, repositoryAccess: true, environmentSetup: true, firstTaskGiven: true, firstFixShipped: true }), /checklist is complete/);
 });
 
 test("/eos connect sends GitHub and email updates to the profile API", async () => {
@@ -249,7 +288,7 @@ test("GitHub onboarding identity validation accepts usernames but rejects URLs a
 });
 
 test("identity and onboarding commands are always private", () => {
-  for (const command of ["profile", "connect", "onboarding"]) {
+  for (const command of ["profile", "connect", "onboarding", "progress"]) {
     assert.equal(PRIVATE_EOS_SUBCOMMANDS.has(command), true);
   }
   assert.equal(PRIVATE_EOS_SUBCOMMANDS.has("status"), false);
