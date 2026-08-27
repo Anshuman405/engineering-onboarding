@@ -10,6 +10,8 @@ const {
   handleSearch,
   handleStatus,
   handleSync,
+  normalizeGitHubUsername,
+  PRIVATE_EOS_SUBCOMMANDS,
   waitForEosReady,
 } = require("../src/eos/commands");
 const { EosApiError } = require("../src/eos/client");
@@ -118,6 +120,7 @@ test("/eos profile renders Engineer and onboarding data", async () => {
   const embed = target.replies[0].embeds[0].toJSON();
   assert.equal(embed.fields.find((field) => field.name === "Onboarding").value, "COMPLETED");
   assert.match(embed.fields.find((field) => field.name === "GitHub").value, /alex-gh/);
+  assert.match(embed.fields.find((field) => field.name === "Next step").value, /Jeremy/);
 });
 
 test("/eos connect sends GitHub and email updates to the profile API", async () => {
@@ -126,6 +129,7 @@ test("/eos connect sends GitHub and email updates to the profile API", async () 
   await handleConnect(github, async (path, options) => { calls.push({ path, options }); return { engineer: { name: "Alex" } }; });
   assert.equal(calls[0].path, "/api/engineers/profile/400000000000000001/github");
   assert.deepEqual(JSON.parse(calls[0].options.body), { githubUsername: "alex-gh" });
+  assert.match(github.replies[0].content, /Jeremy still needs to grant/);
 
   const email = interaction({ options: { getString: (name) => name === "type" ? "email" : "Alex@Example.Test" } });
   await handleConnect(email, async (path, options) => { calls.push({ path, options }); return { engineer: { name: "Alex" } }; });
@@ -151,7 +155,7 @@ test("/eos onboarding links identity and returns the Tally continuation", async 
     target,
     async (path, options) => {
       call = { path, options };
-      return { ok: true };
+      return { ok: true, onboarding: { status: "IN_PROGRESS" } };
     },
     "https://tally.so/r/example"
   );
@@ -167,13 +171,31 @@ test("/eos onboarding links identity and returns the Tally continuation", async 
 
   const reply = target.replies[0];
   const embed = reply.embeds[0].toJSON();
-  assert.equal(embed.title, "Venu engineering onboarding");
+  assert.equal(embed.title, "Venu engineering onboarding — your next steps");
+  assert.match(JSON.stringify(embed), /Jeremy must add/);
+  assert.match(JSON.stringify(embed), /within one week/);
   assert.equal(reply.components[0].toJSON().components[0].url, "https://tally.so/r/example");
+  assert.equal(reply.embeds.length, 1);
+});
+
+test("/eos onboarding recognizes a completed form and provides setup without repeating the form", async () => {
+  const target = interaction({
+    user: { id: "400000000000000001", username: "alex", globalName: "Alex Example" },
+    options: { getString: (name) => name === "github" ? "Alex-GH" : "alex@example.test" },
+  });
+  await handleOnboarding(target, async () => ({ onboarding: { status: "COMPLETED" } }), "https://tally.so/r/example");
+  const reply = target.replies[0];
+  assert.equal(reply.embeds.length, 2);
+  assert.match(reply.embeds[0].toJSON().description, /form are complete/);
+  assert.match(reply.embeds[1].toJSON().title, /Venu 1\.x/);
+  const buttons = reply.components[0].toJSON().components;
+  assert.equal(buttons.some((button) => button.url === "https://tally.so/r/example"), false);
+  assert.equal(buttons.some((button) => /RoboBearLLC\/VenuAI/.test(button.url)), true);
 });
 
 test("/eos onboarding fails safely before writing invalid or unconfigured data", async () => {
   let calls = 0;
-  const request = async () => { calls += 1; };
+  const request = async () => { calls += 1; return { onboarding: { status: "IN_PROGRESS" } }; };
 
   const invalidEmail = interaction({
     user: { id: "400000000000000001", username: "alex" },
@@ -191,8 +213,18 @@ test("/eos onboarding fails safely before writing invalid or unconfigured data",
     },
   });
   await handleOnboarding(missingForm, request, "");
-  assert.match(missingForm.replies[0].content, /not configured/i);
-  assert.equal(calls, 0);
+  assert.match(missingForm.replies[0].content, /temporarily unavailable/i);
+  assert.equal(calls, 1);
+});
+
+test("completed onboarding remains usable if the form integration is temporarily unavailable", async () => {
+  const target = interaction({
+    user: { id: "400000000000000001", username: "alex" },
+    options: { getString: (name) => name === "github" ? "alex-gh" : "alex@example.test" },
+  });
+  await handleOnboarding(target, async () => ({ onboarding: { status: "COMPLETED" } }), "");
+  assert.equal(target.replies[0].embeds.length, 2);
+  assert.match(target.replies[0].embeds[0].toJSON().description, /form are complete/);
 });
 
 test("/eos onboarding is registered and the post-Tally setup guide matches Venu 1.x", () => {
@@ -206,6 +238,22 @@ test("/eos onboarding is registered and the post-Tally setup guide matches Venu 
   assert.match(JSON.stringify(embed), /docker compose up -d --build/);
   assert.match(JSON.stringify(embed), /npm install -g @openai\/codex/);
   assert.match(JSON.stringify(embed), /localhost:3000/);
+  assert.match(JSON.stringify(embed), /within one week/);
+});
+
+test("GitHub onboarding identity validation accepts usernames but rejects URLs and malformed names", () => {
+  assert.equal(normalizeGitHubUsername("@Alex-GH"), "alex-gh");
+  assert.equal(normalizeGitHubUsername("https://github.com/alex"), null);
+  assert.equal(normalizeGitHubUsername("-alex"), null);
+  assert.equal(normalizeGitHubUsername("alex--gh"), null);
+});
+
+test("identity and onboarding commands are always private", () => {
+  for (const command of ["profile", "connect", "onboarding"]) {
+    assert.equal(PRIVATE_EOS_SUBCOMMANDS.has(command), true);
+  }
+  assert.equal(PRIVATE_EOS_SUBCOMMANDS.has("status"), false);
+  assert.equal(PRIVATE_EOS_SUBCOMMANDS.has("sync"), false);
 });
 
 test("/eos sync sends non-bot Product members without changing onboarding behavior", async () => {

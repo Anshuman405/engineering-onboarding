@@ -198,11 +198,17 @@ client.on("guildMemberAdd", async (member) => {
             `
 Welcome to Venu!
 
-Please complete your onboarding form:
+Start your guided engineering onboarding in the Venu server with:
+
+/eos onboarding
+
+The command connects your EOS profile, links the onboarding form, explains that Jeremy grants VenuAI repository access, gives you the local setup checklist, and shows your first-week task.
+
+You can also open the onboarding form directly:
 
 ${process.env.TALLY_FORM_URL}
 
-Your access and team setup will be automatically configured.
+After submitting it, run /eos onboarding again to see your updated next steps.
 `
         );
 

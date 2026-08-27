@@ -16,6 +16,9 @@ const DEFAULT_EOS_WAKE_MAX_WAIT_MS = 75_000;
 const DEFAULT_EOS_WAKE_PROBE_TIMEOUT_MS = 8_000;
 const DEFAULT_EOS_WAKE_RETRY_MS = 2_000;
 const DEFAULT_EOS_WAKE_PROGRESS_MS = 5_000;
+const DEFAULT_VENU_PRODUCT_URL = "https://ai.venu3d.com/";
+const DEFAULT_VENU_REPOSITORY_URL = "https://github.com/RoboBearLLC/VenuAI";
+const PRIVATE_EOS_SUBCOMMANDS = new Set(["profile", "connect", "onboarding", "document", "docs", "search"]);
 
 /*
 |--------------------------------------------------------------------------
@@ -70,11 +73,11 @@ const eosCommand = new SlashCommandBuilder()
   .addSubcommand((subcommand) =>
     subcommand
       .setName("onboarding")
-      .setDescription("Start your guided Venu engineering onboarding")
+      .setDescription("Set up EOS and see your exact Venu onboarding next steps")
       .addStringOption((option) =>
         option
           .setName("github")
-          .setDescription("Your GitHub username")
+          .setDescription("Your GitHub username (Jeremy grants repository access separately)")
           .setRequired(true)
       )
       .addStringOption((option) =>
@@ -186,6 +189,12 @@ async function sendCommandError(interaction, error) {
 function positiveInteger(value, fallback) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function normalizeGitHubUsername(value) {
+  const username = String(value || "").trim().replace(/^@/, "").toLowerCase();
+  if (!/^(?!-)(?!.*--)[a-z0-9-]{1,39}(?<!-)$/.test(username)) return null;
+  return username;
 }
 
 function isRetryableWakeError(error) {
@@ -386,6 +395,14 @@ async function handleProfile(interaction, request = eosRequest) {
           ? truncate(onboarding.status)
           : "Not found",
         inline: true,
+      },
+      {
+        name: "Next step",
+        value: !onboarding
+          ? "Run `/eos onboarding` to create your guided checklist."
+          : onboarding.status !== "COMPLETED"
+            ? "Run `/eos onboarding` and complete the linked Venu form."
+            : "Confirm VenuAI repository access with Jeremy, set up Venu 1.x, then claim your first-week bug or pain point.",
       }
     )
     .setTimestamp();
@@ -402,11 +419,11 @@ async function handleProfile(interaction, request = eosRequest) {
 */
 
 async function handleConnectGitHub(interaction, value, request = eosRequest) {
-  const githubUsername = value.trim().replace(/^@/, "");
+  const githubUsername = normalizeGitHubUsername(value);
 
   if (!githubUsername) {
     return interaction.editReply({
-      content: "Please provide your GitHub username.",
+      content: "Please provide a valid GitHub username, not a profile URL or display name.",
     });
   }
 
@@ -432,7 +449,8 @@ async function handleConnectGitHub(interaction, value, request = eosRequest) {
       `**GitHub:** https://github.com/${githubUsername}` +
       (engineer?.name
         ? `\n**EOS Engineer:** ${engineer.name}`
-        : ""),
+        : "") +
+      "\n\nThis connects your identity in EOS. **Jeremy still needs to grant you access to the private VenuAI repository.**",
   });
 }
 
@@ -524,10 +542,9 @@ async function handleOnboarding(
   request = eosRequest,
   tallyFormUrl = process.env.TALLY_FORM_URL
 ) {
-  const githubUsername = interaction.options
-    .getString("github", true)
-    .trim()
-    .replace(/^@/, "");
+  const githubUsername = normalizeGitHubUsername(
+    interaction.options.getString("github", true)
+  );
   const email = interaction.options
     .getString("email", true)
     .trim()
@@ -535,7 +552,7 @@ async function handleOnboarding(
 
   if (!githubUsername) {
     return interaction.editReply({
-      content: "Please provide your GitHub username.",
+      content: "Please provide a valid GitHub username, not a profile URL or display name.",
     });
   }
 
@@ -545,19 +562,12 @@ async function handleOnboarding(
     });
   }
 
-  if (!/^https?:\/\//i.test(tallyFormUrl || "")) {
-    return interaction.editReply({
-      content:
-        "The Venu onboarding form is not configured yet. Please contact an administrator.",
-    });
-  }
-
   const name =
     interaction.member?.displayName ||
     interaction.user.globalName ||
     interaction.user.username;
 
-  await request("/api/engineers/onboarding", {
+  const result = await request("/api/engineers/onboarding", {
     method: "POST",
     body: JSON.stringify({
       discordUserId: interaction.user.id,
@@ -567,38 +577,75 @@ async function handleOnboarding(
       completed: false,
     }),
   });
+  const onboarding = result.onboarding || result.data?.onboarding;
+  const formCompleted = onboarding?.status === "COMPLETED";
+  if (!formCompleted && !/^https?:\/\//i.test(tallyFormUrl || "")) {
+    return interaction.editReply({
+      content:
+        "Your EOS profile was saved, but the Venu onboarding form is temporarily unavailable. Please contact an administrator and run `/eos onboarding` again later.",
+    });
+  }
+  const productUrl = process.env.VENU_PRODUCT_URL || DEFAULT_VENU_PRODUCT_URL;
+  const repositoryUrl = process.env.VENU_REPOSITORY_URL || DEFAULT_VENU_REPOSITORY_URL;
 
   const embed = new EmbedBuilder()
-    .setTitle("Venu engineering onboarding")
-    .setDescription("Your EOS profile is connected. Continue with the Venu onboarding form.")
+    .setTitle("Venu engineering onboarding — your next steps")
+    .setDescription(
+      formCompleted
+        ? "Your EOS profile and Venu onboarding form are complete. Here is exactly what happens next."
+        : "Your EOS profile is connected. Complete the steps below in order; you do not need to run `/eos connect` again unless your information changes."
+    )
     .addFields(
       {
-        name: "Step 1 — EOS profile",
-        value: `Email and GitHub [@${githubUsername}](https://github.com/${githubUsername}) are connected.`,
+        name: "✅ 1. EOS profile",
+        value: `Your email and GitHub identity [@${githubUsername}](https://github.com/${githubUsername}) are saved. Use \`/eos profile\` to check them anytime.`,
       },
       {
-        name: "Step 2 — Venu onboarding form",
-        value:
-          "Complete the Tally form using the same Discord identity. The existing onboarding automation will configure your server access.",
+        name: `${formCompleted ? "✅" : "➡️"} 2. Venu onboarding form`,
+        value: formCompleted
+          ? "EOS has received and processed your completed form."
+          : "Open the form below and submit it using this same Discord identity. Then run `/eos onboarding` again to see your updated checklist.",
       },
       {
-        name: "Step 3 — Venu 1.x local setup",
+        name: "⏳ 3. GitHub repository access",
         value:
-          "After the form is processed, this bot will DM you the local-development checklist.",
+          "**Jeremy must add your GitHub account to the private VenuAI repository.** EOS cannot grant this permission. If the repository link does not open, your action is to wait for or follow up with Jeremy—not troubleshoot Git locally.",
+      },
+      {
+        name: "🛠️ 4. Set up Venu 1.x",
+        value: formCompleted
+          ? "Once the repository opens for you, follow the local-development checklist included below."
+          : "After your form is processed and Jeremy grants repository access, EOS will show the local-development checklist.",
+      },
+      {
+        name: "🚀 5. First-week onboarding task",
+        value:
+          "Use Venu, identify one real bug or pain point, assign/claim it yourself, and ship the fix within one week. Ask in the engineering channel if you need help choosing or scoping it.",
       }
     )
+    .setFooter({ text: "Need this checklist again? Run /eos onboarding with the same information." })
     .setTimestamp();
 
-  const row = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setLabel("Open Venu onboarding form")
-      .setStyle(ButtonStyle.Link)
-      .setURL(tallyFormUrl)
+  const buttons = [];
+  if (!formCompleted) {
+    buttons.push(new ButtonBuilder().setLabel("Complete onboarding form").setStyle(ButtonStyle.Link).setURL(tallyFormUrl));
+  }
+  buttons.push(
+    new ButtonBuilder().setLabel("Open Venu").setStyle(ButtonStyle.Link).setURL(productUrl),
+    new ButtonBuilder().setLabel("Open VenuAI repository").setStyle(ButtonStyle.Link).setURL(repositoryUrl)
   );
+  const row = new ActionRowBuilder().addComponents(...buttons);
+
+  const embeds = [embed];
+  if (formCompleted) {
+    const { buildVenuSetupEmbed } = require("./venuSetup");
+    embeds.push(buildVenuSetupEmbed(repositoryUrl));
+  }
 
   return interaction.editReply({
-    embeds: [embed],
+    embeds,
     components: [row],
+    allowedMentions: { parse: [] },
   });
 }
 
@@ -885,7 +932,7 @@ async function handleEosCommand(interaction, request = eosRequest, wakeOptions =
      * longer than Discord's initial interaction window.
      */
     await interaction.deferReply({
-      ephemeral: ["onboarding", "document", "docs", "search"].includes(subcommand),
+      ephemeral: PRIVATE_EOS_SUBCOMMANDS.has(subcommand),
     });
 
     await waitForEosReady(interaction, request, wakeOptions);
@@ -944,4 +991,6 @@ module.exports = {
   parseDocumentTags,
   githubRelationFromUrl,
   downloadDiscordAttachment,
+  normalizeGitHubUsername,
+  PRIVATE_EOS_SUBCOMMANDS,
 };

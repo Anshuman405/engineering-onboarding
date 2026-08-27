@@ -2,7 +2,13 @@
 
 The existing bot continues to manage onboarding, member identity synchronization, and `/eos` commands. It does not mirror Discord messages or run historical backfills.
 
-Engineers can run `/eos onboarding` with their GitHub username and email. The command privately links those values to EOS and provides the configured Tally form. When the existing Tally callback successfully processes the form, the bot marks EOS onboarding complete and DMs the engineer the Venu 1.x local-development checklist.
+Engineers run `/eos onboarding github:<username> email:<email>`. One private response links the EOS identity, detects whether the Tally form is already complete, explains that Jeremy grants private VenuAI repository access separately, provides the Venu 1.x setup checklist when ready, and states the first-week task: use Venu, identify and claim a bug or pain point, and fix it within one week. `/eos profile` checks progress; `/eos connect` is only needed later if an email or GitHub username changes. All identity commands are private.
+
+## Shareable new-member instructions
+
+Send new engineers this short workflow:
+
+> Welcome to Venu! Run `/eos onboarding` and enter your GitHub username and email. EOS will show your current step and remember your progress. If you already submitted the onboarding form, run the command anyway—it will detect that and skip the form. Jeremy must grant your GitHub account access to the private VenuAI repository; EOS cannot grant that permission. Once access works, follow the setup checklist and complete your first-week task: use Venu, identify and claim one bug or pain point, and ship the fix within one week. Use `/eos profile` anytime to check your information, and use `/eos connect` only if it needs to change.
 
 `/eos search query:...` privately searches one bounded engineering-context package: documentation, durable knowledge, tasks, ownership, GitHub records, and relevant live messages from the current Discord channel. It returns source links and continues to return durable EOS results when Discord is temporarily unavailable. Live Discord message content is not written to Neon.
 
