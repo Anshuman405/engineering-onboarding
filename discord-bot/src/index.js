@@ -30,6 +30,7 @@ const {
 } = require("./status/command");
 const { StatusMonitorManager } = require("./status/monitor");
 const { registerGuildCommands } = require("./discordStartup");
+const { EosReminderWorker } = require("./eos/reminders");
 
 const statusMonitor = new StatusMonitorManager();
 const discordRuntime = {
@@ -50,6 +51,7 @@ const client = new Client({
     intents: discordIntents
 
 });
+const reminderWorker = new EosReminderWorker(client);
 
 
 
@@ -64,6 +66,7 @@ client.once(
     async () => {
         discordRuntime.ready = true;
         console.log(`Bot online: ${client.user.tag}`);
+        reminderWorker.start();
 
         try {
 
@@ -662,6 +665,7 @@ async function shutdown() {
     await statusMonitor.expireAll(
         "The bot is restarting. Run `/status` again after it returns to start a new 30-minute monitor."
     );
+    await reminderWorker.stop();
     client.destroy();
     httpServer.close(() => process.exit(0));
     const forcedExit = setTimeout(() => process.exit(0), 10_000);

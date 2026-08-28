@@ -20,6 +20,8 @@ const DEFAULT_VENU_PRODUCT_URL = "https://ai.venu3d.com/";
 const DEFAULT_VENU_REPOSITORY_URL = "https://github.com/RoboBearLLC/VenuAI";
 const PRIVATE_EOS_SUBCOMMANDS = new Set(["profile", "connect", "onboarding", "progress", "document", "docs", "search"]);
 
+class TodoInputError extends Error {}
+
 /*
 |--------------------------------------------------------------------------
 | /eos command definition
@@ -162,6 +164,33 @@ const eosCommand = new SlashCommandBuilder()
         .setRequired(true)
         .setMinLength(2)
         .setMaxLength(500))
+  )
+
+  .addSubcommandGroup((group) => group
+    .setName("todo")
+    .setDescription("Manage your private EOS todo list")
+    .addSubcommand((subcommand) => subcommand
+      .setName("add")
+      .setDescription("Add a personal task and optional reminder")
+      .addStringOption((option) => option.setName("title").setDescription("What needs to be done?").setRequired(true).setMaxLength(200))
+      .addStringOption((option) => option.setName("notes").setDescription("Optional details").setMaxLength(2000))
+      .addStringOption((option) => option.setName("due").setDescription("Optional: 30m, 2h, 3d, 1w, or an ISO timestamp"))
+      .addStringOption((option) => option.setName("remind").setDescription("Optional reminder: 30m, 2h, 3d, 1w, or an ISO timestamp")))
+    .addSubcommand((subcommand) => subcommand
+      .setName("list")
+      .setDescription("View your personal tasks")
+      .addStringOption((option) => option.setName("show").setDescription("Which tasks to show").addChoices(
+        { name: "Open", value: "OPEN" }, { name: "Completed", value: "COMPLETED" }, { name: "All", value: "ALL" }
+      )))
+    .addSubcommand((subcommand) => subcommand.setName("done").setDescription("Mark a task complete")
+      .addIntegerOption((option) => option.setName("task").setDescription("Task number from /eos todo list").setRequired(true).setMinValue(1)))
+    .addSubcommand((subcommand) => subcommand.setName("reopen").setDescription("Reopen a completed task")
+      .addIntegerOption((option) => option.setName("task").setDescription("Task number from /eos todo list").setRequired(true).setMinValue(1)))
+    .addSubcommand((subcommand) => subcommand.setName("snooze").setDescription("Set or move a task reminder")
+      .addIntegerOption((option) => option.setName("task").setDescription("Task number from /eos todo list").setRequired(true).setMinValue(1))
+      .addStringOption((option) => option.setName("for").setDescription("30m, 2h, 3d, 1w, or an ISO timestamp").setRequired(true)))
+    .addSubcommand((subcommand) => subcommand.setName("delete").setDescription("Delete a personal task")
+      .addIntegerOption((option) => option.setName("task").setDescription("Task number from /eos todo list").setRequired(true).setMinValue(1)))
   );
 
 /*
@@ -185,6 +214,7 @@ function truncate(value, max = 1024) {
 }
 
 function publicEosErrorMessage(error) {
+  if (error instanceof TodoInputError) return error.message;
   if (error instanceof EosApiError) {
     if (error.status === 0 || error.status >= 500) {
       return "EOS is temporarily unavailable. Please wait a moment and run the command again.";
@@ -224,6 +254,94 @@ function normalizeGitHubUsername(value) {
   return username;
 }
 
+function parseTodoTime(value, now = Date.now()) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const relative = text.match(/^(\d+)\s*([mhdw])$/i);
+  if (relative) {
+    const units = { m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 };
+    const amount = Number(relative[1]);
+    const milliseconds = amount * units[relative[2].toLowerCase()];
+    if (!Number.isSafeInteger(milliseconds) || milliseconds < 60_000 || milliseconds > 365 * 86_400_000) {
+      throw new TodoInputError("Task times must be between 1 minute and 365 days.");
+    }
+    return new Date(now + milliseconds);
+  }
+  const discordTimestamp = text.match(/^<t:(\d{10})(?::[tTdDfFR])?>$/);
+  const date = discordTimestamp ? new Date(Number(discordTimestamp[1]) * 1000) : new Date(text);
+  if (!discordTimestamp && !/(?:Z|[+-]\d{2}:?\d{2})$/i.test(text)) {
+    throw new TodoInputError("Use a relative time like `2h` or an ISO timestamp with a timezone, such as `2026-08-29T09:00:00-07:00`.");
+  }
+  if (!Number.isFinite(date.getTime()) || date.getTime() <= now) throw new TodoInputError("Task times must be in the future.");
+  return date;
+}
+
+function todoTimestamp(value) {
+  if (!value) return null;
+  return `<t:${Math.floor(new Date(value).getTime() / 1000)}:F>`;
+}
+
+function todoLine(task) {
+  const icon = task.status === "COMPLETED" ? "✅" : "⬜";
+  const parts = [`${icon} **#${task.number}** — ${truncate(task.title, 160)}`];
+  if (task.dueAt) parts.push(`due ${todoTimestamp(task.dueAt)}`);
+  const pending = (task.reminders || []).find((reminder) => reminder.status === "PENDING" || reminder.status === "CLAIMED");
+  if (pending) parts.push(`reminder ${todoTimestamp(pending.remindAt)}`);
+  return parts.join(" • ");
+}
+
+function todoApiError(error) {
+  if (!(error instanceof EosApiError)) return error;
+  if (error.status === 400) return new TodoInputError("EOS rejected that task input. Check the task number and use a time such as `30m`, `2h`, or an ISO timestamp with a timezone.");
+  if (error.status === 404) return new TodoInputError("That task or EOS profile was not found. Run `/eos onboarding` if you have not connected your profile, then check `/eos todo list`.");
+  if (error.status === 409) return new TodoInputError("That task cannot be changed in its current state. Reopen it first if you want to set another reminder.");
+  return error;
+}
+
+async function handleTodo(interaction, action, request = eosRequest, now = Date.now()) {
+  const discordUserId = interaction.user.id;
+  const taskNumber = interaction.options.getInteger?.("task");
+  if (action === "add") {
+    const dueAt = parseTodoTime(interaction.options.getString("due"), now);
+    const explicitReminder = parseTodoTime(interaction.options.getString("remind"), now);
+    const remindAt = explicitReminder || dueAt;
+    if (dueAt && remindAt && remindAt > dueAt) throw new TodoInputError("The reminder cannot be after the due time.");
+    const result = await request("/api/personal-tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        discordUserId,
+        title: interaction.options.getString("title", true),
+        description: interaction.options.getString("notes") || undefined,
+        dueAt: dueAt?.toISOString(),
+        remindAt: remindAt?.toISOString(),
+        clientRequestId: interaction.id,
+      }),
+    });
+    const task = result.data;
+    return interaction.editReply({ content: `✅ Added ${todoLine(task)}${remindAt ? "\nI’ll DM you when the reminder is due." : ""}`, allowedMentions: { parse: [] } });
+  }
+  if (action === "list") {
+    const status = interaction.options.getString("show") || "OPEN";
+    const result = await request(`/api/personal-tasks?discordUserId=${encodeURIComponent(discordUserId)}&status=${status}&limit=25`);
+    const tasks = result.data || [];
+    if (!tasks.length) return interaction.editReply({ content: status === "OPEN" ? "Your todo list is clear. Add one with `/eos todo add`." : "No matching personal tasks were found." });
+    const embed = new EmbedBuilder().setTitle("Your EOS todo list").setDescription(tasks.map(todoLine).join("\n").slice(0, 4000)).setFooter({ text: "Use the # number with done, reopen, snooze, or delete." }).setTimestamp();
+    return interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
+  }
+  if (!Number.isInteger(taskNumber) || taskNumber < 1) throw new TodoInputError("Choose a valid task number from `/eos todo list`.");
+  if (action === "snooze") {
+    const remindAt = parseTodoTime(interaction.options.getString("for", true), now);
+    const result = await request(`/api/personal-tasks/${taskNumber}/snooze`, { method: "POST", body: JSON.stringify({ discordUserId, remindAt: remindAt.toISOString() }) });
+    return interaction.editReply({ content: `⏰ Reminder set for ${todoTimestamp(remindAt)} on **#${taskNumber} — ${truncate(result.data.title, 160)}**.` });
+  }
+  if (action === "delete") {
+    await request(`/api/personal-tasks/${taskNumber}?discordUserId=${encodeURIComponent(discordUserId)}`, { method: "DELETE" });
+    return interaction.editReply({ content: `🗑️ Deleted personal task **#${taskNumber}**.` });
+  }
+  const result = await request(`/api/personal-tasks/${taskNumber}`, { method: "PATCH", body: JSON.stringify({ discordUserId, action: action === "done" ? "complete" : "reopen" }) });
+  return interaction.editReply({ content: `${action === "done" ? "✅ Completed" : "⬜ Reopened"} **#${taskNumber} — ${truncate(result.data.title, 160)}**.` });
+}
+
 function isRetryableWakeError(error) {
   if (!(error instanceof EosApiError)) return true;
   if (/must be configured/i.test(error.message)) return false;
@@ -240,8 +358,10 @@ async function waitForEosReady(interaction, request = eosRequest, options = {}) 
   const startedAt = now();
   let lastError = new EosApiError("EOS did not become ready", 0);
   let lastProgressAt = Number.NEGATIVE_INFINITY;
+  let firstAttempt = true;
 
-  while (now() - startedAt < maxWaitMs) {
+  while (firstAttempt || now() - startedAt < maxWaitMs) {
+    firstAttempt = false;
     const elapsedMs = now() - startedAt;
     const remainingSeconds = Math.max(1, Math.ceil((maxWaitMs - elapsedMs) / 1000));
     if (elapsedMs - lastProgressAt >= progressMs) {
@@ -1063,16 +1183,24 @@ async function handleEosCommand(interaction, request = eosRequest, wakeOptions =
   try {
     const subcommand =
       interaction.options.getSubcommand();
+    const subcommandGroup = typeof interaction.options.getSubcommandGroup === "function"
+      ? interaction.options.getSubcommandGroup(false)
+      : null;
 
     /*
      * Defer immediately because database/API requests can take
      * longer than Discord's initial interaction window.
      */
     await interaction.deferReply({
-      ephemeral: PRIVATE_EOS_SUBCOMMANDS.has(subcommand),
+      ephemeral: subcommandGroup === "todo" || PRIVATE_EOS_SUBCOMMANDS.has(subcommand),
     });
 
     await waitForEosReady(interaction, request, wakeOptions);
+
+    if (subcommandGroup === "todo") {
+      try { return await handleTodo(interaction, subcommand, request); }
+      catch (error) { throw todoApiError(error); }
+    }
 
     switch (subcommand) {
       case "status":
@@ -1125,6 +1253,7 @@ module.exports = {
   handleDocument,
   handleDocs,
   handleSearch,
+  handleTodo,
   contextResultLines,
   publicEosErrorMessage,
   sendCommandError,
@@ -1136,5 +1265,9 @@ module.exports = {
   onboardingChecklist,
   onboardingNextStep,
   githubProfileFields,
+  parseTodoTime,
+  todoLine,
+  todoApiError,
+  TodoInputError,
   PRIVATE_EOS_SUBCOMMANDS,
 };
