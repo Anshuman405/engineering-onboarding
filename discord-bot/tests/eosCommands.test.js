@@ -126,7 +126,7 @@ test("/eos ask is registered as a private bounded question command", () => {
   assert.equal(PRIVATE_EOS_SUBCOMMANDS.has("ask"), true);
 });
 
-test("/eos ask requests a bounded channel-scoped answer and renders verified citations", async () => {
+test("/eos ask requests a bounded server-wide answer and renders verified citations", async () => {
   const target = interaction({
     guildId: "319922397899915264",
     channelId: "319932292447338517",
@@ -152,7 +152,6 @@ test("/eos ask requests a bounded channel-scoped answer and renders verified cit
   assert.deepEqual(JSON.parse(call.options.body), {
     question: "What did the team decide about campaigns?",
     serverId: "319922397899915264",
-    channelId: "319932292447338517",
     days: 14,
     limit: 8,
   });

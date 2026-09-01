@@ -1203,7 +1203,6 @@ async function handleAsk(interaction, request = eosRequest) {
     body: JSON.stringify({
       question,
       serverId: interaction.guildId || undefined,
-      channelId: interaction.guildId ? interaction.channelId : undefined,
       days: 14,
       limit: 8,
     }),
