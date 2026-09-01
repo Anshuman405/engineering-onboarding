@@ -18,7 +18,7 @@ const DEFAULT_EOS_WAKE_RETRY_MS = 2_000;
 const DEFAULT_EOS_WAKE_PROGRESS_MS = 5_000;
 const DEFAULT_VENU_PRODUCT_URL = "https://ai.venu3d.com/";
 const DEFAULT_VENU_REPOSITORY_URL = "https://github.com/RoboBearLLC/VenuAI";
-const PRIVATE_EOS_SUBCOMMANDS = new Set(["profile", "connect", "onboarding", "progress", "document", "docs", "search"]);
+const PRIVATE_EOS_SUBCOMMANDS = new Set(["profile", "connect", "onboarding", "progress", "document", "docs", "search", "ask"]);
 
 class TodoInputError extends Error {}
 
@@ -161,6 +161,18 @@ const eosCommand = new SlashCommandBuilder()
       .addStringOption((option) => option
         .setName("query")
         .setDescription("Question or engineering topic")
+        .setRequired(true)
+        .setMinLength(2)
+        .setMaxLength(500))
+  )
+
+  .addSubcommand((subcommand) =>
+    subcommand
+      .setName("ask")
+      .setDescription("Ask EOS about connected engineering context")
+      .addStringOption((option) => option
+        .setName("question")
+        .setDescription("Question about Venu engineering work or decisions")
         .setRequired(true)
         .setMinLength(2)
         .setMaxLength(500))
@@ -1173,6 +1185,47 @@ async function handleSearch(interaction, request = eosRequest) {
   return interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
 }
 
+function answerSourceLine(citation) {
+  const label = truncate(citation.label || `${citation.sourceType}: ${citation.sourceId}`, 140).replace(/[\[\]]/g, "");
+  try {
+    const url = new URL(citation.url);
+    if (["http:", "https:"].includes(url.protocol)) return `• [${label}](${url.toString()})`;
+  } catch {
+    // A source can be a durable EOS record without an external URL.
+  }
+  return `• ${label}`;
+}
+
+async function handleAsk(interaction, request = eosRequest) {
+  const question = interaction.options.getString("question", true).trim();
+  const result = await request("/api/context/answer", {
+    method: "POST",
+    body: JSON.stringify({
+      question,
+      serverId: interaction.guildId || undefined,
+      channelId: interaction.guildId ? interaction.channelId : undefined,
+      days: 14,
+      limit: 8,
+    }),
+  });
+  const data = result.data || result;
+  const embed = new EmbedBuilder()
+    .setTitle("EOS answer")
+    .setDescription(truncate(data.answer, 4000))
+    .setColor(data.insufficientContext ? 0xfee75c : 0x5865f2)
+    .setFooter({ text: data.insufficientContext
+      ? `Insufficient context • ${data.confidence || "LOW"} confidence`
+      : `${data.confidence || "UNKNOWN"} confidence • Sources verified by EOS` })
+    .setTimestamp();
+  if (data.citations?.length) {
+    embed.addFields({
+      name: "Sources",
+      value: truncate(data.citations.slice(0, 10).map(answerSourceLine).join("\n"), 1024),
+    });
+  }
+  return interaction.editReply({ embeds: [embed], allowedMentions: { parse: [] } });
+}
+
 /*
 |--------------------------------------------------------------------------
 | Main command handler
@@ -1230,6 +1283,9 @@ async function handleEosCommand(interaction, request = eosRequest, wakeOptions =
       case "search":
         return await handleSearch(interaction, request);
 
+      case "ask":
+        return await handleAsk(interaction, request);
+
       default:
         return interaction.editReply({
           content: "Unknown EOS command.",
@@ -1253,6 +1309,7 @@ module.exports = {
   handleDocument,
   handleDocs,
   handleSearch,
+  handleAsk,
   handleTodo,
   contextResultLines,
   publicEosErrorMessage,

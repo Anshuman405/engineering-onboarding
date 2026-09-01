@@ -9,6 +9,7 @@ const {
   handleProgress,
   handleProfile,
   handleSearch,
+  handleAsk,
   handleStatus,
   handleSync,
   normalizeGitHubUsername,
@@ -112,6 +113,72 @@ test("/eos search reports a useful empty state", async () => {
     documents: [], knowledge: [], tasks: [], github: { issues: [], pullRequests: [], commits: [] }, engineers: [], discord: null, warnings: [],
   } }));
   assert.match(target.replies[0].content, /No connected engineering context matched/);
+});
+
+test("/eos ask is registered as a private bounded question command", () => {
+  const ask = eosCommand.toJSON().options.find((option) => option.name === "ask");
+  assert.ok(ask);
+  assert.equal(ask.options.length, 1);
+  assert.equal(ask.options[0].name, "question");
+  assert.equal(ask.options[0].required, true);
+  assert.equal(ask.options[0].min_length, 2);
+  assert.equal(ask.options[0].max_length, 500);
+  assert.equal(PRIVATE_EOS_SUBCOMMANDS.has("ask"), true);
+});
+
+test("/eos ask requests a bounded channel-scoped answer and renders verified citations", async () => {
+  const target = interaction({
+    guildId: "319922397899915264",
+    channelId: "319932292447338517",
+    options: { getString: (name) => name === "question" ? "What did the team decide about campaigns?" : null },
+  });
+  let call;
+  await handleAsk(target, async (path, options) => {
+    call = { path, options };
+    return { data: {
+      answer: "The team chose the event-driven campaign pipeline.",
+      confidence: "HIGH",
+      insufficientContext: false,
+      provider: "gemini",
+      model: "gemini-test",
+      citations: [
+        { sourceType: "DISCORD_MESSAGE", sourceId: "500000000000000001", label: "Discord message in #dev", url: "https://discord.com/channels/319922397899915264/319932292447338517/500000000000000001" },
+        { sourceType: "DOCUMENT", sourceId: "doc-1", label: "Campaign architecture", url: "https://docs.google.com/document/d/doc-1" },
+      ],
+    } };
+  });
+
+  assert.equal(call.path, "/api/context/answer");
+  assert.deepEqual(JSON.parse(call.options.body), {
+    question: "What did the team decide about campaigns?",
+    serverId: "319922397899915264",
+    channelId: "319932292447338517",
+    days: 14,
+    limit: 8,
+  });
+  const reply = target.replies[0];
+  const embed = reply.embeds[0].toJSON();
+  assert.match(embed.description, /event-driven campaign pipeline/);
+  assert.match(embed.fields.find((field) => field.name === "Sources").value, /Discord message in #dev/);
+  assert.match(embed.fields.find((field) => field.name === "Sources").value, /Campaign architecture/);
+  assert.match(embed.footer.text, /HIGH confidence/);
+  assert.deepEqual(reply.allowedMentions, { parse: [] });
+});
+
+test("/eos ask clearly reports insufficient retrieved context without fake sources", async () => {
+  const target = interaction({ options: { getString: () => "Unknown project decision" } });
+  await handleAsk(target, async () => ({ data: {
+    answer: "EOS does not have enough retrieved context to answer that yet.",
+    confidence: "LOW",
+    insufficientContext: true,
+    provider: "gemini",
+    model: "gemini-test",
+    citations: [],
+  } }));
+  const embed = target.replies[0].embeds[0].toJSON();
+  assert.match(embed.description, /does not have enough retrieved context/i);
+  assert.equal(Boolean(embed.fields?.some((field) => field.name === "Sources")), false);
+  assert.match(embed.footer.text, /Insufficient context/);
 });
 
 test("/eos profile renders Engineer and onboarding data", async () => {

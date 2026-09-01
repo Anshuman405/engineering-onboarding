@@ -12,6 +12,8 @@ Send new engineers this short workflow:
 
 `/eos search query:...` privately searches one bounded engineering-context package: documentation, durable knowledge, tasks, ownership, GitHub records, and relevant live messages from the current Discord channel. It returns source links and continues to return durable EOS results when Discord is temporarily unavailable. Live Discord message content is not written to Neon.
 
+`/eos ask question:...` privately asks the configured EOS AI provider to answer from that same bounded package. EOS rejects citations to any Discord message, document, knowledge entry, task, engineer, issue, PR, or commit that was not actually retrieved, and the bot displays only EOS-verified source links. The answer and live Discord content are not persisted. If evidence is missing, the command reports insufficient context rather than guessing.
+
 Copy `discord-bot/.env.example` to `discord-bot/.env`, preserve the existing onboarding settings, and configure:
 
 ```env
